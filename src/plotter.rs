@@ -1,4 +1,4 @@
-use iced::widget::canvas;
+use iced::widget::shader;
 use iced::{Color, Element, Length};
 
 // ================================================================================
@@ -35,8 +35,6 @@ pub struct PlotSeries<'a> {
     pub label: String,
     pub color: Color,
     pub points: PlotPoints<'a>,
-    // TODO add options for dot style and optional
-    // connecting lines
 }
 
 // ================================================================================
@@ -48,6 +46,7 @@ pub struct PlotterOptions {
     pub show_legend: bool,
 }
 
+#[derive(Default)]
 pub struct Plotter<'a> {
     // data related
     pub series: Vec<PlotSeries<'a>>,
@@ -56,25 +55,16 @@ pub struct Plotter<'a> {
     pub options: PlotterOptions,
 }
 
-impl Default for Plotter<'_> {
-    fn default() -> Self {
-        Plotter {
-            series: Vec::new(),
-            options: PlotterOptions::default(),
-        }
-    }
-}
-
 // ================================================================================
 // Public Methods
 // ================================================================================
 
 impl Plotter<'_> {
-    /// Main function for drawing plotter in view.
+    /// Main function for drawing plotter in view using GPU shaders.
     pub fn draw<'a, Message>(&'a self) -> Element<'a, Message>
     where
         Message: 'a,
     {
-        canvas(self).width(Length::Fill).height(Length::Fill).into()
+        shader(self).width(Length::Fill).height(Length::Fill).into()
     }
 }

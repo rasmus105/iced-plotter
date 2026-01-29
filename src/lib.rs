@@ -1,3 +1,4 @@
-pub mod canvas;
+pub mod gpu_types;
+pub mod pipeline;
 pub mod plotter;
-pub mod renderer;
+pub mod shader;

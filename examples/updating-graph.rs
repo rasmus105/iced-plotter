@@ -2,13 +2,8 @@ use iced::time::{self, Duration};
 use iced::widget::{column, row, text, Container};
 use iced::{Color, Element, Length, Subscription, Theme};
 use iced_plotter::plotter::{PlotPoint, PlotPoints, PlotSeries, Plotter, PlotterOptions};
-use std::env;
 
 pub fn main() {
-    // unsafe {
-    //     env::set_var("ICED_BACKEND", "tiny_skia");
-    // }
-
     iced::application(
         UpdatingGraph::new,
         UpdatingGraph::update,
@@ -46,7 +41,7 @@ impl UpdatingGraph<'_> {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        time::every(Duration::from_millis(50)).map(|_| Message::Tick)
+        time::every(Duration::from_micros(10)).map(|_| Message::Tick)
     }
 
     pub fn update(&mut self, message: Message) {
@@ -54,17 +49,15 @@ impl UpdatingGraph<'_> {
             Message::Tick => {
                 // Add a new point based on current time
                 let x = self.time;
-                let y = (self.time * 0.5).sin() + (self.time * 1.3).cos() * 0.5;
+                let y = (x * 0.001).sin() + (x * 0.000314).cos() * 6.28;
 
                 // Get mutable access to the first series' owned points
-                if let Some(series) = self.plotter.series.get_mut(0) {
-                    if let PlotPoints::Owned(ref mut points) = series.points {
-                        points.push(PlotPoint { x, y });
+                if let Some(series) = self.plotter.series.get_mut(0) && let PlotPoints::Owned(ref mut points) = series.points {
+                    points.push(PlotPoint { x, y });
 
-                        // Keep last 200 points for a sliding window effect
-                        if points.len() > 200 {
-                            points.remove(0);
-                        }
+                    // Keep last 200 points for a sliding window effect
+                    if points.len() > 500000 {
+                        points.remove(0);
                     }
                 }
 
