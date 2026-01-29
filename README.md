@@ -2,6 +2,9 @@
 
 Iced graph/plotting library.
 
+> [!IMPORTANT]
+> Work in progress.
+
 ## TODO
 **Features:**
 - Display points on canvas

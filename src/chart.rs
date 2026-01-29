@@ -1,8 +1,9 @@
 use iced::{mouse, widget::canvas, Color, Element, Length, Point, Rectangle, Renderer, Theme};
 
+#[derive(Clone)]
 pub struct PlotPoint {
-    x: f64,
-    y: f64,
+    pub x: f64,
+    pub y: f64,
 }
 
 /// Describes a function y = f(x) with an optional range for x and a number of
@@ -94,44 +95,107 @@ impl<Message> canvas::Program<Message> for Chart<'_> {
     }
 }
 
+/// Draws points to the frame given pre-computed (x, y) values and known ranges.
+fn draw_points_with_ranges(
+    frame: &mut canvas::Frame,
+    points: impl Iterator<Item = (f64, f64)>,
+    x_range: (f64, f64),
+    y_range: (f64, f64),
+    plot_bounds: (f32, f32, f32, f32), // left, right, top, bottom
+    point_color: Color,
+) {
+    let (plot_left, plot_right, plot_top, plot_bottom) = plot_bounds;
+    let plot_width = plot_right - plot_left;
+    let plot_height = plot_bottom - plot_top;
+
+    let (x_min, x_max) = x_range;
+    let x_span = x_max - x_min;
+
+    let (y_min, y_max) = y_range;
+    let y_span = if (y_max - y_min).abs() < f64::EPSILON {
+        1.0 // Avoid division by zero for constant functions
+    } else {
+        y_max - y_min
+    };
+
+    let dot_radius = 3.0;
+    for (x, y) in points {
+        let screen_x = plot_left + ((x - x_min) / x_span) as f32 * plot_width;
+        let screen_y = plot_bottom - ((y - y_min) / y_span) as f32 * plot_height;
+
+        let dot = canvas::Path::circle(Point::new(screen_x, screen_y), dot_radius);
+        frame.fill(&dot, point_color);
+    }
+}
+
 ///
 /// Private methods
 ///
 impl Chart<'_> {
+    /// Draws points from a slice (works for both Owned and Borrowed variants).
+    fn draw_from_slice(
+        &self,
+        points: &[PlotPoint],
+        frame: &mut canvas::Frame,
+        plot_bounds: (f32, f32, f32, f32),
+        point_color: Color,
+    ) {
+        if points.is_empty() {
+            return;
+        }
+
+        // Calculate x and y ranges from the data
+        let x_min = points.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let x_max = points.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let y_min = points.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let y_max = points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+
+        draw_points_with_ranges(
+            frame,
+            points.iter().map(|p| (p.x, p.y)),
+            (x_min, x_max),
+            (y_min, y_max),
+            plot_bounds,
+            point_color,
+        );
+    }
+
     fn draw_points(
         &self,
         frame: &mut canvas::Frame,
-        state: &CanvasState,
+        _state: &CanvasState,
         bounds_width: f32,
         bounds_height: f32,
         padding: f32,
         point_color: Color,
     ) {
-        use PlotPoints::*;
-
         // Calculate plot area
         let plot_left = padding;
         let plot_right = bounds_width - padding;
         let plot_top = padding;
         let plot_bottom = bounds_height - padding;
-        let plot_width = plot_right - plot_left;
-        let plot_height = plot_bottom - plot_top;
+        let plot_bounds = (plot_left, plot_right, plot_top, plot_bottom);
 
         match &self.points {
-            Owned(_points) => todo!(),
-            Borrowed(_points) => todo!(),
-            Generator(generator) => {
+            PlotPoints::Owned(points) => {
+                self.draw_from_slice(points, frame, plot_bounds, point_color)
+            }
+            PlotPoints::Borrowed(points) => {
+                self.draw_from_slice(points, frame, plot_bounds, point_color)
+            }
+            PlotPoints::Generator(generator) => {
                 let (x_min, x_max) = generator.x_range;
                 let x_span = x_max - x_min;
 
-                // First pass: generate all y values to find y range
-                let mut y_values: Vec<(f64, f64)> = Vec::with_capacity(generator.points);
-                for i in 0..generator.points {
-                    let t = i as f64 / (generator.points - 1).max(1) as f64;
-                    let x = x_min + t * x_span;
-                    let y = (generator.function)(x);
-                    y_values.push((x, y));
-                }
+                // Generate all (x, y) values
+                let y_values: Vec<(f64, f64)> = (0..generator.points)
+                    .map(|i| {
+                        let t = i as f64 / (generator.points - 1).max(1) as f64;
+                        let x = x_min + t * x_span;
+                        let y = (generator.function)(x);
+                        (x, y)
+                    })
+                    .collect();
 
                 // Calculate y range (auto-scale)
                 let y_min = y_values
@@ -142,22 +206,15 @@ impl Chart<'_> {
                     .iter()
                     .map(|(_, y)| *y)
                     .fold(f64::NEG_INFINITY, f64::max);
-                let y_span = if (y_max - y_min).abs() < f64::EPSILON {
-                    1.0 // Avoid division by zero for constant functions
-                } else {
-                    y_max - y_min
-                };
 
-                // Draw each point as a small filled circle
-                let dot_radius = 3.0;
-                for (x, y) in y_values {
-                    // Transform to screen coordinates
-                    let screen_x = plot_left + ((x - x_min) / x_span) as f32 * plot_width;
-                    let screen_y = plot_bottom - ((y - y_min) / y_span) as f32 * plot_height;
-
-                    let dot = canvas::Path::circle(Point::new(screen_x, screen_y), dot_radius);
-                    frame.fill(&dot, point_color);
-                }
+                draw_points_with_ranges(
+                    frame,
+                    y_values.into_iter(),
+                    (x_min, x_max),
+                    (y_min, y_max),
+                    plot_bounds,
+                    point_color,
+                );
             }
         }
     }
