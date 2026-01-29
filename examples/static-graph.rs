@@ -1,6 +1,6 @@
 use iced::widget::{column, row, text, Container};
 use iced::{Element, Length, Theme};
-use iced_graph::chart::{self, Chart};
+use iced_graph::chart::{self, Chart, ExplicitGenerator, PlotPoints};
 use std::env;
 
 pub fn main() {
@@ -21,14 +21,21 @@ pub fn main() {
 enum Message {}
 
 #[derive(Default)]
-struct StaticGraph {
-    chart: Chart,
+struct StaticGraph<'a> {
+    chart: Chart<'a>,
 }
 
-impl StaticGraph {
+impl StaticGraph<'_> {
     pub fn default() -> Self {
         Self {
-            chart: Chart::new(400., 300.),
+            chart: Chart {
+                points: PlotPoints::Generator(ExplicitGenerator {
+                    function: Box::new(f64::sin),
+                    x_range: (0., 10.),
+                    points: 1000,
+                }),
+                ..Default::default()
+            },
         }
     }
     pub fn update(&mut self, _message: Message) {}
