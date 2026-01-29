@@ -5,9 +5,9 @@ use iced_plotter::plotter::{PlotPoint, PlotPoints, PlotSeries, Plotter, PlotterO
 use std::env;
 
 pub fn main() {
-    unsafe {
-        env::set_var("ICED_BACKEND", "tiny_skia");
-    }
+    // unsafe {
+    //     env::set_var("ICED_BACKEND", "tiny_skia");
+    // }
 
     iced::application(
         UpdatingGraph::new,
