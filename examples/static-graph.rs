@@ -1,6 +1,6 @@
 use iced::widget::{column, row, text, Container};
 use iced::{Element, Length, Theme};
-use iced_graph::chart::{self, Chart, ExplicitGenerator, PlotPoints};
+use iced_plotter::chart::{self, Chart, ExplicitGenerator, PlotPoints};
 use std::env;
 
 pub fn main() {

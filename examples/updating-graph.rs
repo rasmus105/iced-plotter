@@ -1,7 +1,7 @@
 use iced::time::{self, Duration};
 use iced::widget::{column, row, text, Container};
 use iced::{Element, Length, Subscription, Theme};
-use iced_graph::chart::{Chart, PlotPoint, PlotPoints};
+use iced_plotter::chart::{Chart, PlotPoint, PlotPoints};
 use std::env;
 
 pub fn main() {

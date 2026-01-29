@@ -1218,7 +1218,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "iced-graph"
+name = "iced-plotter"
 version = "0.1.0"
 dependencies = [
  "bon",

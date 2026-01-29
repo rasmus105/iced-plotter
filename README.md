@@ -1,4 +1,4 @@
-# Iced Graph
+# Iced Plotter
 
 Iced graph/plotting library.
 
