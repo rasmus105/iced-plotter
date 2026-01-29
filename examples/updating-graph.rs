@@ -1,7 +1,7 @@
 use iced::time::{self, Duration};
 use iced::widget::{column, row, text, Container};
-use iced::{Element, Length, Subscription, Theme};
-use iced_plotter::chart::{Chart, PlotPoint, PlotPoints};
+use iced::{Color, Element, Length, Subscription, Theme};
+use iced_plotter::plotter::{PlotPoint, PlotPoints, PlotSeries, Plotter, PlotterOptions};
 use std::env;
 
 pub fn main() {
@@ -26,16 +26,20 @@ enum Message {
 }
 
 struct UpdatingGraph<'a> {
-    chart: Chart<'a>,
+    plotter: Plotter<'a>,
     time: f64,
 }
 
 impl UpdatingGraph<'_> {
     pub fn new() -> Self {
         Self {
-            chart: Chart {
-                points: PlotPoints::Owned(Vec::new()),
-                ..Default::default()
+            plotter: Plotter {
+                series: vec![PlotSeries {
+                    label: "wave".to_string(),
+                    color: Color::from_rgb(0.2, 0.8, 0.4),
+                    points: PlotPoints::Owned(Vec::new()),
+                }],
+                options: PlotterOptions::default(),
             },
             time: 0.0,
         }
@@ -52,13 +56,15 @@ impl UpdatingGraph<'_> {
                 let x = self.time;
                 let y = (self.time * 0.5).sin() + (self.time * 1.3).cos() * 0.5;
 
-                // Get mutable access to the owned points
-                if let PlotPoints::Owned(ref mut points) = self.chart.points {
-                    points.push(PlotPoint { x, y });
+                // Get mutable access to the first series' owned points
+                if let Some(series) = self.plotter.series.get_mut(0) {
+                    if let PlotPoints::Owned(ref mut points) = series.points {
+                        points.push(PlotPoint { x, y });
 
-                    // Keep last 200 points for a sliding window effect
-                    if points.len() > 200 {
-                        points.remove(0);
+                        // Keep last 200 points for a sliding window effect
+                        if points.len() > 200 {
+                            points.remove(0);
+                        }
                     }
                 }
 
@@ -68,10 +74,15 @@ impl UpdatingGraph<'_> {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let point_count = match &self.chart.points {
-            PlotPoints::Owned(points) => points.len(),
-            _ => 0,
-        };
+        let point_count = self
+            .plotter
+            .series
+            .first()
+            .map(|s| match &s.points {
+                PlotPoints::Owned(points) => points.len(),
+                _ => 0,
+            })
+            .unwrap_or(0);
 
         let info = column![
             text("Updating Graph"),
@@ -81,7 +92,7 @@ impl UpdatingGraph<'_> {
         .spacing(10);
 
         row![
-            Container::new(self.chart.draw())
+            Container::new(self.plotter.draw())
                 .width(Length::FillPortion(3))
                 .height(Length::Fill),
             Container::new(info)
