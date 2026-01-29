@@ -1,15 +1,23 @@
 use iced::widget::{column, row, text, Container};
 use iced::{Element, Length, Theme};
-
 use iced_graph::chart::{self, Chart};
+use std::env;
 
 pub fn main() {
+    //  when using the default wgpu backend, artifacts from the canvas are left behind
+    //  when resizing quickly.
+    //  TODO: File github issue about this.
+    unsafe {
+        env::set_var("ICED_BACKEND", "tiny_skia");
+    }
+
     iced::application(StaticGraph::default, StaticGraph::update, StaticGraph::view)
         .theme(Theme::GruvboxDark)
         .run()
         .unwrap()
 }
 
+#[derive(Debug)]
 enum Message {}
 
 #[derive(Default)]

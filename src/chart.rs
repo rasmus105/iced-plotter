@@ -48,7 +48,7 @@ impl<Message> canvas::Program<Message> for Chart {
         &self,
         _state: &Self::State,
         renderer: &Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
@@ -56,7 +56,13 @@ impl<Message> canvas::Program<Message> for Chart {
 
         // Draw the axes
         let padding = 50.0;
-        self.draw_axes(&mut frame, bounds.width, bounds.height, padding);
+        self.draw_axes(
+            &mut frame,
+            bounds.width,
+            bounds.height,
+            padding,
+            theme.palette().text,
+        );
 
         vec![frame.into_geometry()]
     }
@@ -83,6 +89,7 @@ impl Chart {
         bounds_width: f32,
         bounds_height: f32,
         padding: f32,
+        axis_color: Color,
     ) {
         // Define the plot boundaries with padding
         let plot_left = padding;
@@ -93,7 +100,7 @@ impl Chart {
         // Draw X-axis (horizontal line at bottom)
         let x_axis = canvas::Path::line(
             Point {
-                x: plot_left,
+                x: plot_left - padding * 0.2,
                 y: plot_bottom,
             },
             Point {
@@ -104,7 +111,7 @@ impl Chart {
         frame.stroke(
             &x_axis,
             canvas::Stroke::default()
-                .with_color(Color::BLACK)
+                .with_color(axis_color)
                 .with_width(2.0),
         );
 
@@ -116,13 +123,13 @@ impl Chart {
             },
             Point {
                 x: plot_left,
-                y: plot_bottom,
+                y: plot_bottom + padding * 0.2,
             },
         );
         frame.stroke(
             &y_axis,
             canvas::Stroke::default()
-                .with_color(Color::BLACK)
+                .with_color(axis_color)
                 .with_width(2.0),
         );
     }
