@@ -14,25 +14,6 @@ pub struct RawPoint {
 }
 
 impl RawPoint {
-    pub fn new(x: f64, y: f64, color: Color) -> Self {
-        Self {
-            position: [x as f32, y as f32],
-            color: [color.r, color.g, color.b, color.a],
-        }
-    }
-}
-
-/// A vertex for line rendering (position + color + side info for thickness).
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct LineVertex {
-    /// Screen position (x, y)
-    pub position: [f32; 2],
-    /// RGBA color
-    pub color: [f32; 4],
-}
-
-impl LineVertex {
     pub fn new(x: f32, y: f32, color: Color) -> Self {
         Self {
             position: [x, y],

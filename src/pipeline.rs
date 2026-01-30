@@ -1,6 +1,6 @@
 //! GPU rendering pipeline for the plotter.
 
-use crate::gpu_types::{LineVertex, RawPoint, Uniforms};
+use crate::gpu_types::{RawPoint, Uniforms};
 use iced::wgpu;
 
 /// A dynamically resizable GPU buffer.
@@ -131,7 +131,7 @@ impl Pipeline {
 
         // Line vertex buffer layout
         let line_vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<LineVertex>() as u64,
+            array_stride: std::mem::size_of::<RawPoint>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {
@@ -232,7 +232,7 @@ impl Pipeline {
         let line_buffer = DynamicBuffer::new(
             device,
             "line_buffer",
-            1024 * std::mem::size_of::<LineVertex>() as u64,
+            1024 * std::mem::size_of::<RawPoint>() as u64,
             wgpu::BufferUsages::VERTEX,
         );
 
@@ -254,7 +254,7 @@ impl Pipeline {
         queue: &wgpu::Queue,
         uniforms: &Uniforms,
         points: &[RawPoint],
-        line_vertices: &[LineVertex],
+        line_vertices: &[RawPoint],
     ) {
         // Update uniforms
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));

@@ -24,7 +24,7 @@ impl StaticGraph<'_> {
                     label: "sin(x)".to_string(),
                     color: Color::from_rgb(0.8, 0.4, 0.2),
                     points: PlotPoints::Generator(ExplicitGenerator {
-                        function: Box::new(f64::sin),
+                        function: Box::new(f32::sin),
                         x_range: (0., 10.),
                         points: 1000,
                     }),

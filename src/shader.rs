@@ -1,6 +1,6 @@
 //! Shader-based rendering for the plotter using iced's wgpu backend.
 
-use crate::gpu_types::{LineVertex, RawPoint, RenderConfig, Uniforms};
+use crate::gpu_types::{RawPoint, RenderConfig, Uniforms};
 use crate::pipeline::Pipeline;
 use crate::plotter::{PlotPoints, PlotSeries, Plotter, PlotterOptions};
 
@@ -21,7 +21,7 @@ pub struct PlotterPrimitive {
     /// Points to render as markers
     points: Vec<RawPoint>,
     /// Pre-computed line vertices (triangles for thick lines)
-    line_vertices: Vec<LineVertex>,
+    line_vertices: Vec<RawPoint>,
     /// Uniform data for coordinate transformation
     uniforms: Uniforms,
     /// Config for what to render
@@ -38,7 +38,7 @@ impl PlotterPrimitive {
 
         // Collect all points and calculate data ranges
         let mut all_points: Vec<RawPoint> = Vec::new();
-        let mut all_xy: Vec<(f64, f64, Color)> = Vec::new();
+        let mut all_xy: Vec<(f32, f32, Color)> = Vec::new();
 
         for s in series {
             let color = s.color;
@@ -59,7 +59,7 @@ impl PlotterPrimitive {
                     let (x_min, x_max) = generator.x_range;
                     let x_span = x_max - x_min;
                     for i in 0..generator.points {
-                        let t = i as f64 / (generator.points - 1).max(1) as f64;
+                        let t = i as f32 / (generator.points - 1).max(1) as f32;
                         let x = x_min + t * x_span;
                         let y = (generator.function)(x);
                         all_points.push(RawPoint::new(x, y, color));
@@ -76,22 +76,22 @@ impl PlotterPrimitive {
             let x_min = all_xy
                 .iter()
                 .map(|(x, _, _)| *x)
-                .fold(f64::INFINITY, f64::min);
+                .fold(f32::INFINITY, f32::min);
             let x_max = all_xy
                 .iter()
                 .map(|(x, _, _)| *x)
-                .fold(f64::NEG_INFINITY, f64::max);
+                .fold(f32::NEG_INFINITY, f32::max);
             let y_min = all_xy
                 .iter()
                 .map(|(_, y, _)| *y)
-                .fold(f64::INFINITY, f64::min);
+                .fold(f32::INFINITY, f32::min);
             let y_max = all_xy
                 .iter()
                 .map(|(_, y, _)| *y)
-                .fold(f64::NEG_INFINITY, f64::max);
+                .fold(f32::NEG_INFINITY, f32::max);
 
             // Handle constant y values
-            let y_span = if (y_max - y_min).abs() < f64::EPSILON {
+            let y_span = if (y_max - y_min).abs() < f32::EPSILON {
                 (y_min - 0.5, y_max + 0.5)
             } else {
                 (y_min, y_max)
@@ -104,8 +104,8 @@ impl PlotterPrimitive {
 
         let uniforms = Uniforms {
             viewport_size: [bounds.width, bounds.height],
-            x_range: [x_min as f32, x_max as f32],
-            y_range: [y_min as f32, y_max as f32],
+            x_range: [x_min, x_max],
+            y_range: [y_min, y_max],
             padding: [padding, padding],
             marker_radius: 4.0,
             line_width: 2.0,
@@ -127,10 +127,7 @@ impl PlotterPrimitive {
     }
 
     /// Generate line vertices as quads for thick lines.
-    fn generate_line_vertices(
-        points: &[(f64, f64, Color)],
-        uniforms: &Uniforms,
-    ) -> Vec<LineVertex> {
+    fn generate_line_vertices(points: &[(f32, f32, Color)], uniforms: &Uniforms) -> Vec<RawPoint> {
         if points.len() < 2 {
             return Vec::new();
         }
@@ -144,9 +141,9 @@ impl PlotterPrimitive {
         let half_width = uniforms.line_width / 2.0;
 
         // Convert data coords to screen coords
-        let to_screen = |x: f64, y: f64| -> (f32, f32) {
-            let x_norm = (x as f32 - x_range[0]) / (x_range[1] - x_range[0]);
-            let y_norm = (y as f32 - y_range[0]) / (y_range[1] - y_range[0]);
+        let to_screen = |x: f32, y: f32| -> (f32, f32) {
+            let x_norm = (x - x_range[0]) / (x_range[1] - x_range[0]);
+            let y_norm = (y - y_range[0]) / (y_range[1] - y_range[0]);
             let screen_x = uniforms.padding[0] + x_norm * plot_width;
             let screen_y = uniforms.padding[1] + (1.0 - y_norm) * plot_height;
             (screen_x, screen_y)
@@ -172,10 +169,10 @@ impl PlotterPrimitive {
             let ny = dx / len * half_width;
 
             // Create quad (2 triangles)
-            let v0 = LineVertex::new(sx0 + nx, sy0 + ny, color);
-            let v1 = LineVertex::new(sx0 - nx, sy0 - ny, color);
-            let v2 = LineVertex::new(sx1 + nx, sy1 + ny, color);
-            let v3 = LineVertex::new(sx1 - nx, sy1 - ny, color);
+            let v0 = RawPoint::new(sx0 + nx, sy0 + ny, color);
+            let v1 = RawPoint::new(sx0 - nx, sy0 - ny, color);
+            let v2 = RawPoint::new(sx1 + nx, sy1 + ny, color);
+            let v3 = RawPoint::new(sx1 - nx, sy1 - ny, color);
 
             // Triangle 1
             vertices.push(v0);

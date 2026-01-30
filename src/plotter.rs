@@ -7,15 +7,15 @@ use iced::{Color, Element, Length};
 
 #[derive(Clone)]
 pub struct PlotPoint {
-    pub x: f64,
-    pub y: f64,
+    pub x: f32,
+    pub y: f32,
 }
 
 /// Describes a function y = f(x) with an optional range for x and a number of
 /// points.
 pub struct ExplicitGenerator<'a> {
-    pub function: Box<dyn Fn(f64) -> f64 + 'a>,
-    pub x_range: (f64, f64), // start, end
+    pub function: Box<dyn Fn(f32) -> f32 + 'a>,
+    pub x_range: (f32, f32), // start, end
     pub points: usize,
 }
 

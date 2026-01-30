@@ -22,7 +22,7 @@ enum Message {
 
 struct UpdatingGraph<'a> {
     plotter: Plotter<'a>,
-    time: f64,
+    time: f32,
 }
 
 impl UpdatingGraph<'_> {
