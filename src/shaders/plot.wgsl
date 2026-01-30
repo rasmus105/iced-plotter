@@ -1,4 +1,21 @@
-// Plot shader - renders markers as instanced quads with circular masking
+// Plot shader - renders markers as instanced quads with various shapes, and lines
+
+// Marker shape constants
+const SHAPE_CIRCLE: u32 = 0u;
+const SHAPE_SQUARE: u32 = 1u;
+const SHAPE_DIAMOND: u32 = 2u;
+const SHAPE_TRIANGLE_UP: u32 = 3u;
+const SHAPE_TRIANGLE_DOWN: u32 = 4u;
+const SHAPE_CROSS: u32 = 5u;
+const SHAPE_PLUS: u32 = 6u;
+const SHAPE_NONE: u32 = 7u;
+
+// Line pattern constants
+const PATTERN_SOLID: u32 = 0u;
+const PATTERN_DASHED: u32 = 1u;
+const PATTERN_DOTTED: u32 = 2u;
+const PATTERN_DASHDOT: u32 = 3u;
+const PATTERN_NONE: u32 = 4u;
 
 struct Uniforms {
     viewport_size: vec2<f32>,
@@ -11,17 +28,20 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
-// Per-instance point data
+// Per-instance point data for markers
 struct PointInput {
     @location(0) position: vec2<f32>,  // Data coordinates
     @location(1) color: vec4<f32>,
+    @location(2) shape: u32,           // Marker shape
+    @location(3) _padding: u32,
 }
 
 // Vertex shader output
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) local_pos: vec2<f32>,  // Position within quad for circle masking
+    @location(1) local_pos: vec2<f32>,  // Position within quad for shape rendering
+    @location(2) shape: u32,            // Marker shape
 }
 
 // Quad vertices for instanced rendering (2 triangles)
@@ -55,6 +75,68 @@ fn data_to_ndc(data_pos: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ndc_x, ndc_y);
 }
 
+// Signed distance functions for various marker shapes
+fn sdf_circle(p: vec2<f32>) -> f32 {
+    return length(p) - 1.0;
+}
+
+fn sdf_square(p: vec2<f32>) -> f32 {
+    let d = abs(p) - vec2<f32>(0.7);
+    return max(d.x, d.y);
+}
+
+fn sdf_diamond(p: vec2<f32>) -> f32 {
+    return (abs(p.x) + abs(p.y)) - 1.0;
+}
+
+fn sdf_triangle_up(p: vec2<f32>) -> f32 {
+    // Equilateral triangle pointing up
+    let h = 0.866; // sqrt(3)/2
+    let d0 = abs(p.x) - 0.7;
+    let d1 = p.y + 0.5;
+    let d2 = (abs(p.x) * 0.866 - p.y) * 0.5 - 0.5;
+    return max(max(d0, d1), d2);
+}
+
+fn sdf_triangle_down(p: vec2<f32>) -> f32 {
+    // Triangle pointing down
+    let h = 0.866;
+    let d0 = abs(p.x) - 0.7;
+    let d1 = -p.y - 0.5;
+    let d2 = (abs(p.x) * 0.866 + p.y) * 0.5 - 0.5;
+    return max(max(d0, d1), d2);
+}
+
+fn sdf_cross(p: vec2<f32>) -> f32 {
+    // Cross/X shape
+    let thickness = 0.2;
+    let d1 = abs(abs(p.x) - abs(p.y)) - thickness;
+    let d2 = max(abs(p.x), abs(p.y)) - 1.0;
+    return max(d1, d2);
+}
+
+fn sdf_plus(p: vec2<f32>) -> f32 {
+    // Plus/+ shape
+    let thickness = 0.2;
+    let d1 = max(abs(p.x), abs(p.y)) - thickness;
+    let d2 = min(abs(p.x), abs(p.y)) - thickness;
+    let d3 = max(abs(p.x), abs(p.y)) - 1.0;
+    return max(min(d1, d2), d3);
+}
+
+fn evaluate_sdf(p: vec2<f32>, shape: u32) -> f32 {
+    switch shape {
+        case SHAPE_CIRCLE: { return sdf_circle(p); }
+        case SHAPE_SQUARE: { return sdf_square(p); }
+        case SHAPE_DIAMOND: { return sdf_diamond(p); }
+        case SHAPE_TRIANGLE_UP: { return sdf_triangle_up(p); }
+        case SHAPE_TRIANGLE_DOWN: { return sdf_triangle_down(p); }
+        case SHAPE_CROSS: { return sdf_cross(p); }
+        case SHAPE_PLUS: { return sdf_plus(p); }
+        default: { return sdf_circle(p); }
+    }
+}
+
 @vertex
 fn vs_marker(
     @builtin(vertex_index) vertex_index: u32,
@@ -80,22 +162,28 @@ fn vs_marker(
     out.clip_position = vec4<f32>(final_pos, 0.0, 1.0);
     out.color = point.color;
     out.local_pos = local_pos;
+    out.shape = point.shape;
     
     return out;
 }
 
 @fragment
 fn fs_marker(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Calculate distance from center of quad
-    let dist = length(in.local_pos);
+    // Skip rendering if shape is NONE
+    if in.shape == SHAPE_NONE {
+        discard;
+    }
     
-    // Discard pixels outside the circle
-    if dist > 1.0 {
+    // Evaluate signed distance field for this shape
+    let sdf = evaluate_sdf(in.local_pos, in.shape);
+    
+    // Discard pixels outside the shape
+    if sdf > 0.1 {
         discard;
     }
     
     // Anti-aliasing: smooth edge
-    let alpha = 1.0 - smoothstep(0.8, 1.0, dist);
+    let alpha = 1.0 - smoothstep(-0.1, 0.1, sdf);
     
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
@@ -129,3 +217,5 @@ fn vs_line(vertex: LineVertexInput) -> LineVertexOutput {
 fn fs_line(in: LineVertexOutput) -> @location(0) vec4<f32> {
     return in.color;
 }
+
+

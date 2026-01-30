@@ -1,7 +1,9 @@
 use iced::time::{self, Duration};
 use iced::widget::{column, row, text, Container};
 use iced::{Color, Element, Length, Subscription, Theme};
-use iced_plotter::plotter::{PlotPoint, PlotPoints, PlotSeries, Plotter, PlotterOptions};
+use iced_plotter::plotter::{
+    ColorMode, PlotPoint, PlotPoints, PlotSeries, Plotter, PlotterOptions, SeriesStyle,
+};
 
 pub fn main() {
     iced::application(
@@ -31,7 +33,7 @@ impl UpdatingGraph<'_> {
             plotter: Plotter {
                 series: vec![PlotSeries {
                     label: "wave".to_string(),
-                    color: Color::from_rgb(0.2, 0.8, 0.4),
+                    style: SeriesStyle::new(ColorMode::Solid(Color::from_rgb(0.2, 0.8, 0.4))),
                     points: PlotPoints::Owned(Vec::new()),
                 }],
                 options: PlotterOptions::default(),
@@ -52,11 +54,13 @@ impl UpdatingGraph<'_> {
                 let y = (x * 0.001).sin() + (x * 0.000314).cos() * 6.28;
 
                 // Get mutable access to the first series' owned points
-                if let Some(series) = self.plotter.series.get_mut(0) && let PlotPoints::Owned(ref mut points) = series.points {
+                if let Some(series) = self.plotter.series.get_mut(0)
+                    && let PlotPoints::Owned(ref mut points) = series.points
+                {
                     points.push(PlotPoint { x, y });
 
-                    // Keep last 200 points for a sliding window effect
-                    if points.len() > 500000 {
+                    // Keep last x points for a sliding window effect
+                    if points.len() > 100000 {
                         points.remove(0);
                     }
                 }

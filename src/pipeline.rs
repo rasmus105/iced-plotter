@@ -126,10 +126,20 @@ impl Pipeline {
                     offset: 8,
                     shader_location: 1,
                 },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Uint32,
+                    offset: 24,
+                    shader_location: 2,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Uint32,
+                    offset: 28,
+                    shader_location: 3,
+                },
             ],
         };
 
-        // Line vertex buffer layout
+        // Line vertex buffer layout - uses RawPoint but only reads position and color
         let line_vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<RawPoint>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -144,6 +154,7 @@ impl Pipeline {
                     offset: 8,
                     shader_location: 1,
                 },
+                // Lines don't use distance/pattern yet - will add later if needed
             ],
         };
 
