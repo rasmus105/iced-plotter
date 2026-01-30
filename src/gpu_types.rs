@@ -1,7 +1,6 @@
 //! GPU-compatible data types for shader rendering.
 
 use bytemuck::{Pod, Zeroable};
-use iced::Color;
 
 /// A point with position and color, ready for GPU upload.
 #[repr(C)]
@@ -14,10 +13,10 @@ pub struct RawPoint {
 }
 
 impl RawPoint {
-    pub fn new(x: f32, y: f32, color: Color) -> Self {
+    pub fn new(x: f32, y: f32, color: [f32; 4]) -> Self {
         Self {
             position: [x, y],
-            color: [color.r, color.g, color.b, color.a],
+            color,
         }
     }
 }
@@ -38,24 +37,4 @@ pub struct Uniforms {
     pub marker_radius: f32,
     /// Line width in pixels
     pub line_width: f32,
-}
-
-impl Default for Uniforms {
-    fn default() -> Self {
-        Self {
-            viewport_size: [800.0, 600.0],
-            x_range: [0.0, 1.0],
-            y_range: [0.0, 1.0],
-            padding: [50.0, 50.0],
-            marker_radius: 4.0,
-            line_width: 2.0,
-        }
-    }
-}
-
-/// Configuration for what to render.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RenderConfig {
-    pub show_markers: bool,
-    pub show_lines: bool,
 }

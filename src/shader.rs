@@ -1,18 +1,25 @@
 //! Shader-based rendering for the plotter using iced's wgpu backend.
 
-use crate::gpu_types::{RawPoint, RenderConfig, Uniforms};
+use crate::gpu_types::{RawPoint, Uniforms};
 use crate::pipeline::Pipeline;
 use crate::plotter::{PlotPoints, PlotSeries, Plotter, PlotterOptions};
 
 use iced::mouse::Cursor;
 use iced::wgpu;
 use iced::widget::shader::{self, Viewport};
-use iced::{Color, Rectangle};
+use iced::Rectangle;
 
 /// State for the shader program (zoom/pan state, etc.).
 #[derive(Default)]
 pub struct PlotterState {
     pub is_dragging: bool,
+}
+
+/// Configuration for what to render.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RenderConfig {
+    pub show_markers: bool,
+    pub show_lines: bool,
 }
 
 /// The primitive that holds all data to be rendered on the GPU.
@@ -31,74 +38,69 @@ pub struct PlotterPrimitive {
 impl PlotterPrimitive {
     /// Create a new primitive from plotter data.
     pub fn new(series: &[PlotSeries], bounds: Rectangle, _options: &PlotterOptions) -> Self {
+        // Default to showing both markers and lines
         let config = RenderConfig {
             show_markers: true,
             show_lines: true,
-        }; // Default to showing both markers and lines
+        };
 
-        // Collect all points and calculate data ranges
+        // Collect all points and calculate data ranges in a single pass
         let mut all_points: Vec<RawPoint> = Vec::new();
-        let mut all_xy: Vec<(f32, f32, Color)> = Vec::new();
+        let mut x_min = f32::INFINITY;
+        let mut x_max = f32::NEG_INFINITY;
+        let mut y_min = f32::INFINITY;
+        let mut y_max = f32::NEG_INFINITY;
 
         for s in series {
             let color = s.color;
+            let color_array = [color.r, color.g, color.b, color.a];
             match &s.points {
                 PlotPoints::Owned(points) => {
                     for p in points {
-                        all_points.push(RawPoint::new(p.x, p.y, color));
-                        all_xy.push((p.x, p.y, color));
+                        all_points.push(RawPoint::new(p.x, p.y, color_array));
+                        x_min = x_min.min(p.x);
+                        x_max = x_max.max(p.x);
+                        y_min = y_min.min(p.y);
+                        y_max = y_max.max(p.y);
                     }
                 }
                 PlotPoints::Borrowed(points) => {
                     for p in *points {
-                        all_points.push(RawPoint::new(p.x, p.y, color));
-                        all_xy.push((p.x, p.y, color));
+                        all_points.push(RawPoint::new(p.x, p.y, color_array));
+                        x_min = x_min.min(p.x);
+                        x_max = x_max.max(p.x);
+                        y_min = y_min.min(p.y);
+                        y_max = y_max.max(p.y);
                     }
                 }
                 PlotPoints::Generator(generator) => {
-                    let (x_min, x_max) = generator.x_range;
-                    let x_span = x_max - x_min;
+                    let (x_min_range, x_max_range) = generator.x_range;
+                    let x_span = x_max_range - x_min_range;
                     for i in 0..generator.points {
                         let t = i as f32 / (generator.points - 1).max(1) as f32;
-                        let x = x_min + t * x_span;
+                        let x = x_min_range + t * x_span;
                         let y = (generator.function)(x);
-                        all_points.push(RawPoint::new(x, y, color));
-                        all_xy.push((x, y, color));
+                        all_points.push(RawPoint::new(x, y, color_array));
+                        x_min = x_min.min(x);
+                        x_max = x_max.max(x);
+                        y_min = y_min.min(y);
+                        y_max = y_max.max(y);
                     }
                 }
             }
         }
 
-        // Calculate data ranges
-        let (x_min, x_max, y_min, y_max) = if all_xy.is_empty() {
-            (0.0, 1.0, 0.0, 1.0)
-        } else {
-            let x_min = all_xy
-                .iter()
-                .map(|(x, _, _)| *x)
-                .fold(f32::INFINITY, f32::min);
-            let x_max = all_xy
-                .iter()
-                .map(|(x, _, _)| *x)
-                .fold(f32::NEG_INFINITY, f32::max);
-            let y_min = all_xy
-                .iter()
-                .map(|(_, y, _)| *y)
-                .fold(f32::INFINITY, f32::min);
-            let y_max = all_xy
-                .iter()
-                .map(|(_, y, _)| *y)
-                .fold(f32::NEG_INFINITY, f32::max);
-
+        // Handle empty data and constant y values
+        if all_points.is_empty() {
+            x_min = 0.0;
+            x_max = 1.0;
+            y_min = 0.0;
+            y_max = 1.0;
+        } else if (y_max - y_min).abs() < f32::EPSILON {
             // Handle constant y values
-            let y_span = if (y_max - y_min).abs() < f32::EPSILON {
-                (y_min - 0.5, y_max + 0.5)
-            } else {
-                (y_min, y_max)
-            };
-
-            (x_min, x_max, y_span.0, y_span.1)
-        };
+            y_min -= 0.5;
+            y_max += 0.5;
+        }
 
         let padding = 50.0;
 
@@ -113,7 +115,7 @@ impl PlotterPrimitive {
 
         // Generate line vertices (thick lines as quads)
         let line_vertices = if config.show_lines {
-            Self::generate_line_vertices(&all_xy, &uniforms)
+            Self::generate_line_vertices(&all_points, &uniforms)
         } else {
             Vec::new()
         };
@@ -127,7 +129,7 @@ impl PlotterPrimitive {
     }
 
     /// Generate line vertices as quads for thick lines.
-    fn generate_line_vertices(points: &[(f32, f32, Color)], uniforms: &Uniforms) -> Vec<RawPoint> {
+    fn generate_line_vertices(points: &[RawPoint], uniforms: &Uniforms) -> Vec<RawPoint> {
         if points.len() < 2 {
             return Vec::new();
         }
@@ -150,8 +152,13 @@ impl PlotterPrimitive {
         };
 
         for window in points.windows(2) {
-            let (x0, y0, color) = window[0];
-            let (x1, y1, _) = window[1];
+            let p0 = &window[0];
+            let p1 = &window[1];
+            let x0 = p0.position[0];
+            let y0 = p0.position[1];
+            let x1 = p1.position[0];
+            let y1 = p1.position[1];
+            let color = p0.color;
 
             let (sx0, sy0) = to_screen(x0, y0);
             let (sx1, sy1) = to_screen(x1, y1);
