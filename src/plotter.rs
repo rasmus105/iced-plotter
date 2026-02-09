@@ -523,6 +523,9 @@ impl<Message> canvas::Program<Message> for AxisOverlay {
 
         if self.show_x && x_span.abs() > f32::EPSILON {
             for (tick, label) in self.x_ticks.iter().zip(&self.x_labels) {
+                if *tick < self.x_range[0] || *tick > self.x_range[1] {
+                    continue;
+                }
                 let x_norm = (tick - self.x_range[0]) / x_span;
                 let screen_x = self.padding + x_norm * plot_width;
                 let screen_y = self.padding + plot_height + 6.0;
@@ -542,6 +545,9 @@ impl<Message> canvas::Program<Message> for AxisOverlay {
 
         if self.show_y && y_span.abs() > f32::EPSILON {
             for (tick, label) in self.y_ticks.iter().zip(&self.y_labels) {
+                if *tick < self.y_range[0] || *tick > self.y_range[1] {
+                    continue;
+                }
                 let y_norm = (tick - self.y_range[0]) / y_span;
                 let screen_y = self.padding + (1.0 - y_norm) * plot_height;
                 let screen_x = self.padding - 6.0;

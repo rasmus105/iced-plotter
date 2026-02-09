@@ -379,6 +379,9 @@ impl PlotterPrimitive {
 
             let x_ticks = compute_ticks(x_range[0], x_range[1], &options.x_axis.ticks);
             for &v in &x_ticks {
+                if v < x_range[0] || v > x_range[1] {
+                    continue;
+                }
                 let x_norm = (v - x_range[0]) / (x_range[1] - x_range[0]);
                 let screen_x = padding_x + x_norm * plot_width;
                 push_line_quad(
@@ -394,6 +397,9 @@ impl PlotterPrimitive {
 
             let y_ticks = compute_ticks(y_range[0], y_range[1], &options.y_axis.ticks);
             for &v in &y_ticks {
+                if v < y_range[0] || v > y_range[1] {
+                    continue;
+                }
                 let y_norm = (v - y_range[0]) / (y_range[1] - y_range[0]);
                 let screen_y = padding_y + (1.0 - y_norm) * plot_height;
                 push_line_quad(
