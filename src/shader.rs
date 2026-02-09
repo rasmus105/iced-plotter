@@ -3,6 +3,7 @@
 use crate::gpu_types::{RawPoint, Uniforms};
 use crate::pipeline::Pipeline;
 use crate::plotter::{ColorMode, PlotPoints, PlotSeries, Plotter, PlotterOptions};
+use crate::ticks::compute_ticks;
 
 use iced::Rectangle;
 use iced::mouse::Cursor;
@@ -22,6 +23,12 @@ pub struct RenderConfig {
     pub show_lines: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct TickInfo {
+    pub x_ticks: Vec<f32>,
+    pub y_ticks: Vec<f32>,
+}
+
 /// The primitive that holds all data to be rendered on the GPU.
 #[derive(Debug)]
 pub struct PlotterPrimitive {
@@ -33,9 +40,12 @@ pub struct PlotterPrimitive {
     uniforms: Uniforms,
     /// Config for what to render
     config: RenderConfig,
+    /// Pre-computed grid line vertices
+    grid_vertices: Vec<RawPoint>,
     /// Series boundaries to prevent line connections between series
     #[allow(dead_code)]
     series_boundaries: Vec<usize>,
+    pub tick_info: TickInfo,
 }
 
 impl PlotterPrimitive {
@@ -136,12 +146,20 @@ impl PlotterPrimitive {
             Vec::new()
         };
 
+        let grid_vertices = Self::generate_grid_vertices(options, &uniforms);
+
+        let x_ticks = compute_ticks(x_min, x_max, &options.x_axis.ticks);
+        let y_ticks = compute_ticks(y_min, y_max, &options.y_axis.ticks);
+        let tick_info = TickInfo { x_ticks, y_ticks };
+
         Self {
             points: all_points,
             line_vertices,
             uniforms,
             config,
+            grid_vertices,
             series_boundaries,
+            tick_info,
         }
     }
 
@@ -308,6 +326,130 @@ impl PlotterPrimitive {
 
         vertices
     }
+
+    fn generate_grid_vertices(options: &PlotterOptions, uniforms: &Uniforms) -> Vec<RawPoint> {
+        let mut vertices = Vec::new();
+
+        let padding_x = uniforms.padding[0];
+        let padding_y = uniforms.padding[1];
+        let plot_width = uniforms.viewport_size[0] - 2.0 * padding_x;
+        let plot_height = uniforms.viewport_size[1] - 2.0 * padding_y;
+        let x_range = uniforms.x_range;
+        let y_range = uniforms.y_range;
+
+        let push_line_quad =
+            |vertices: &mut Vec<RawPoint>,
+             x0: f32,
+             y0: f32,
+             x1: f32,
+             y1: f32,
+             half_width: f32,
+             color: [f32; 4]| {
+                let dx = x1 - x0;
+                let dy = y1 - y0;
+                let len = (dx * dx + dy * dy).sqrt();
+                if len < 0.001 {
+                    return;
+                }
+                let nx = -dy / len * half_width;
+                let ny = dx / len * half_width;
+
+                let v0 = RawPoint::new(x0 + nx, y0 + ny, color);
+                let v1 = RawPoint::new(x0 - nx, y0 - ny, color);
+                let v2 = RawPoint::new(x1 + nx, y1 + ny, color);
+                let v3 = RawPoint::new(x1 - nx, y1 - ny, color);
+
+                vertices.push(v0);
+                vertices.push(v1);
+                vertices.push(v2);
+
+                vertices.push(v1);
+                vertices.push(v3);
+                vertices.push(v2);
+            };
+
+        if options.grid.show {
+            let grid_color = [
+                options.grid.color.r,
+                options.grid.color.g,
+                options.grid.color.b,
+                options.grid.color.a,
+            ];
+            let grid_half = options.grid.line_width / 2.0;
+
+            let x_ticks = compute_ticks(x_range[0], x_range[1], &options.x_axis.ticks);
+            for &v in &x_ticks {
+                let x_norm = (v - x_range[0]) / (x_range[1] - x_range[0]);
+                let screen_x = padding_x + x_norm * plot_width;
+                push_line_quad(
+                    &mut vertices,
+                    screen_x,
+                    padding_y,
+                    screen_x,
+                    padding_y + plot_height,
+                    grid_half,
+                    grid_color,
+                );
+            }
+
+            let y_ticks = compute_ticks(y_range[0], y_range[1], &options.y_axis.ticks);
+            for &v in &y_ticks {
+                let y_norm = (v - y_range[0]) / (y_range[1] - y_range[0]);
+                let screen_y = padding_y + (1.0 - y_norm) * plot_height;
+                push_line_quad(
+                    &mut vertices,
+                    padding_x,
+                    screen_y,
+                    padding_x + plot_width,
+                    screen_y,
+                    grid_half,
+                    grid_color,
+                );
+            }
+        }
+
+        if options.x_axis.show {
+            let color = [
+                options.x_axis.color.r,
+                options.x_axis.color.g,
+                options.x_axis.color.b,
+                options.x_axis.color.a,
+            ];
+            let half = options.x_axis.line_width / 2.0;
+            let screen_y = padding_y + plot_height;
+            push_line_quad(
+                &mut vertices,
+                padding_x,
+                screen_y,
+                padding_x + plot_width,
+                screen_y,
+                half,
+                color,
+            );
+        }
+
+        if options.y_axis.show {
+            let color = [
+                options.y_axis.color.r,
+                options.y_axis.color.g,
+                options.y_axis.color.b,
+                options.y_axis.color.a,
+            ];
+            let half = options.y_axis.line_width / 2.0;
+            let screen_x = padding_x;
+            push_line_quad(
+                &mut vertices,
+                screen_x,
+                padding_y,
+                screen_x,
+                padding_y + plot_height,
+                half,
+                color,
+            );
+        }
+
+        vertices
+    }
 }
 
 impl shader::Primitive for PlotterPrimitive {
@@ -327,21 +469,24 @@ impl shader::Primitive for PlotterPrimitive {
             &self.uniforms,
             &self.points,
             &self.line_vertices,
+            &self.grid_vertices,
         );
     }
 
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
-        // Draw lines first (behind markers)
+        if !self.grid_vertices.is_empty() {
+            pipeline.render_grid(render_pass, self.grid_vertices.len() as u32);
+        }
+
         if self.config.show_lines {
             pipeline.render_lines(render_pass, self.line_vertices.len() as u32);
         }
 
-        // Draw markers on top
         if self.config.show_markers {
             pipeline.render_markers(render_pass, self.points.len() as u32);
         }
 
-        true // We handled the rendering
+        true
     }
 }
 

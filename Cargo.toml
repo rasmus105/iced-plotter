@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 bytemuck = { version = "1.21", features = ["derive"] }
-iced = { version = "0.14.0", features = ["wgpu", "debug", "tokio"] }
+iced = { version = "0.14.0", features = ["wgpu", "debug", "tokio", "canvas"] }
 

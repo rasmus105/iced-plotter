@@ -1,7 +1,9 @@
 use std::borrow::Cow;
 
+use iced::widget::canvas;
 use iced::widget::shader;
-use iced::{Element, Length};
+use iced::widget::stack;
+use iced::{Element, Font, Length, Point, Renderer, Theme};
 
 // ================================================================================
 // Style Types
@@ -284,10 +286,87 @@ impl<'a> PlotSeries<'a> {
 // ================================================================================
 
 #[derive(Clone, Debug)]
+pub struct GridStyle {
+    pub show: bool,
+    pub color: iced::Color,
+    pub line_width: f32,
+}
+
+impl Default for GridStyle {
+    fn default() -> Self {
+        Self {
+            show: true,
+            color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+            line_width: 1.0,
+        }
+    }
+}
+
+pub struct AxisConfig {
+    pub show: bool,
+    pub color: iced::Color,
+    pub line_width: f32,
+    pub label_color: iced::Color,
+    pub label_size: f32,
+    pub ticks: crate::ticks::TickConfig,
+    pub format: Box<dyn Fn(f32) -> String>,
+}
+
+impl Clone for AxisConfig {
+    fn clone(&self) -> Self {
+        Self {
+            show: self.show,
+            color: self.color,
+            line_width: self.line_width,
+            label_color: self.label_color,
+            label_size: self.label_size,
+            ticks: self.ticks.clone(),
+            format: Box::new(|v| format!("{v:.2}")),
+        }
+    }
+}
+
+impl std::fmt::Debug for AxisConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AxisConfig")
+            .field("show", &self.show)
+            .field("color", &self.color)
+            .field("line_width", &self.line_width)
+            .field("label_color", &self.label_color)
+            .field("label_size", &self.label_size)
+            .field("ticks", &self.ticks)
+            .finish()
+    }
+}
+
+impl Default for AxisConfig {
+    fn default() -> Self {
+        Self {
+            show: true,
+            color: iced::Color::WHITE,
+            line_width: 1.5,
+            label_color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.7),
+            label_size: 12.0,
+            ticks: crate::ticks::TickConfig::default(),
+            format: Box::new(|v| format!("{v:.2}")),
+        }
+    }
+}
+
+impl AxisConfig {
+    pub fn with_format(mut self, f: impl Fn(f32) -> String + 'static) -> Self {
+        self.format = Box::new(f);
+        self
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct PlotterOptions {
     pub show_legend: bool,
-    /// Padding around the plot area in pixels
     pub padding: f32,
+    pub grid: GridStyle,
+    pub x_axis: AxisConfig,
+    pub y_axis: AxisConfig,
 }
 
 impl Default for PlotterOptions {
@@ -295,6 +374,9 @@ impl Default for PlotterOptions {
         Self {
             show_legend: false,
             padding: 50.0,
+            grid: GridStyle::default(),
+            x_axis: AxisConfig::default(),
+            y_axis: AxisConfig::default(),
         }
     }
 }
@@ -325,11 +407,158 @@ impl<'a> Plotter<'a> {
         self
     }
 
-    /// Main function for drawing plotter in view using GPU shaders.
+    fn compute_data_ranges(&self) -> ([f32; 2], [f32; 2]) {
+        let mut x_min = f32::INFINITY;
+        let mut x_max = f32::NEG_INFINITY;
+        let mut y_min = f32::INFINITY;
+        let mut y_max = f32::NEG_INFINITY;
+
+        for s in &self.series {
+            let iter: Box<dyn Iterator<Item = (f32, f32)> + '_> = match &s.points {
+                PlotPoints::Owned(pts) => Box::new(pts.iter().map(|p| (p.x, p.y))),
+                PlotPoints::Borrowed(pts) => Box::new(pts.iter().map(|p| (p.x, p.y))),
+                PlotPoints::Generator(generator) => {
+                    let (x0, x1) = generator.x_range;
+                    let span = x1 - x0;
+                    let n = generator.points;
+                    Box::new((0..n).map(move |i| {
+                        let t = i as f32 / (n - 1).max(1) as f32;
+                        let x = x0 + t * span;
+                        let y = (generator.function)(x);
+                        (x, y)
+                    }))
+                }
+            };
+            for (x, y) in iter {
+                x_min = x_min.min(x);
+                x_max = x_max.max(x);
+                y_min = y_min.min(y);
+                y_max = y_max.max(y);
+            }
+        }
+
+        if x_min > x_max {
+            x_min = 0.0;
+            x_max = 1.0;
+            y_min = 0.0;
+            y_max = 1.0;
+        } else if (y_max - y_min).abs() < f32::EPSILON {
+            y_min -= 0.5;
+            y_max += 0.5;
+        }
+
+        ([x_min, x_max], [y_min, y_max])
+    }
+
     pub fn draw<'view, Message>(&'view self) -> Element<'view, Message>
     where
         Message: 'view,
     {
-        shader(self).width(Length::Fill).height(Length::Fill).into()
+        let (x_range, y_range) = self.compute_data_ranges();
+        let x_ticks = crate::ticks::compute_ticks(x_range[0], x_range[1], &self.options.x_axis.ticks);
+        let y_ticks = crate::ticks::compute_ticks(y_range[0], y_range[1], &self.options.y_axis.ticks);
+
+        let x_labels: Vec<String> = x_ticks.iter().map(|v| (self.options.x_axis.format)(*v)).collect();
+        let y_labels: Vec<String> = y_ticks.iter().map(|v| (self.options.y_axis.format)(*v)).collect();
+
+        let overlay = AxisOverlay {
+            x_ticks,
+            y_ticks,
+            x_labels,
+            y_labels,
+            x_range,
+            y_range,
+            padding: self.options.padding,
+            x_label_color: self.options.x_axis.label_color,
+            y_label_color: self.options.y_axis.label_color,
+            x_label_size: self.options.x_axis.label_size,
+            y_label_size: self.options.y_axis.label_size,
+            show_x: self.options.x_axis.show,
+            show_y: self.options.y_axis.show,
+        };
+
+        stack![
+            shader(self).width(Length::Fill).height(Length::Fill),
+            canvas(overlay).width(Length::Fill).height(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+}
+
+struct AxisOverlay {
+    x_ticks: Vec<f32>,
+    y_ticks: Vec<f32>,
+    x_labels: Vec<String>,
+    y_labels: Vec<String>,
+    x_range: [f32; 2],
+    y_range: [f32; 2],
+    padding: f32,
+    x_label_color: iced::Color,
+    y_label_color: iced::Color,
+    x_label_size: f32,
+    y_label_size: f32,
+    show_x: bool,
+    show_y: bool,
+}
+
+impl<Message> canvas::Program<Message> for AxisOverlay {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+
+        let plot_width = bounds.width - 2.0 * self.padding;
+        let plot_height = bounds.height - 2.0 * self.padding;
+        let x_span = self.x_range[1] - self.x_range[0];
+        let y_span = self.y_range[1] - self.y_range[0];
+
+        if self.show_x && x_span.abs() > f32::EPSILON {
+            for (tick, label) in self.x_ticks.iter().zip(&self.x_labels) {
+                let x_norm = (tick - self.x_range[0]) / x_span;
+                let screen_x = self.padding + x_norm * plot_width;
+                let screen_y = self.padding + plot_height + 6.0;
+
+                frame.fill_text(canvas::Text {
+                    content: label.clone(),
+                    size: iced::Pixels(self.x_label_size),
+                    position: Point::new(screen_x, screen_y),
+                    color: self.x_label_color,
+                    align_x: iced::alignment::Horizontal::Center.into(),
+                    align_y: iced::alignment::Vertical::Top,
+                    font: Font::MONOSPACE,
+                    ..canvas::Text::default()
+                });
+            }
+        }
+
+        if self.show_y && y_span.abs() > f32::EPSILON {
+            for (tick, label) in self.y_ticks.iter().zip(&self.y_labels) {
+                let y_norm = (tick - self.y_range[0]) / y_span;
+                let screen_y = self.padding + (1.0 - y_norm) * plot_height;
+                let screen_x = self.padding - 6.0;
+
+                frame.fill_text(canvas::Text {
+                    content: label.clone(),
+                    size: iced::Pixels(self.y_label_size),
+                    position: Point::new(screen_x, screen_y),
+                    color: self.y_label_color,
+                    align_x: iced::alignment::Horizontal::Right.into(),
+                    align_y: iced::alignment::Vertical::Center,
+                    font: Font::MONOSPACE,
+                    ..canvas::Text::default()
+                });
+            }
+        }
+
+        vec![frame.into_geometry()]
     }
 }

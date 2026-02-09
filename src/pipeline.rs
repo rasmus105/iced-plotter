@@ -55,6 +55,7 @@ pub struct Pipeline {
     line_pipeline: wgpu::RenderPipeline,
     point_buffer: DynamicBuffer,
     line_buffer: DynamicBuffer,
+    grid_buffer: DynamicBuffer,
     uniform_buffer: wgpu::Buffer,
     #[allow(dead_code)]
     bind_group_layout: wgpu::BindGroupLayout,
@@ -247,11 +248,19 @@ impl Pipeline {
             wgpu::BufferUsages::VERTEX,
         );
 
+        let grid_buffer = DynamicBuffer::new(
+            device,
+            "grid_buffer",
+            1024 * std::mem::size_of::<RawPoint>() as u64,
+            wgpu::BufferUsages::VERTEX,
+        );
+
         Self {
             marker_pipeline,
             line_pipeline,
             point_buffer,
             line_buffer,
+            grid_buffer,
             uniform_buffer,
             bind_group_layout,
             bind_group,
@@ -266,6 +275,7 @@ impl Pipeline {
         uniforms: &Uniforms,
         points: &[RawPoint],
         line_vertices: &[RawPoint],
+        grid_vertices: &[RawPoint],
     ) {
         // Update uniforms
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
@@ -284,6 +294,13 @@ impl Pipeline {
             self.line_buffer
                 .ensure_capacity(device, line_data.len() as u64);
             queue.write_buffer(&self.line_buffer.buffer, 0, line_data);
+        }
+
+        if !grid_vertices.is_empty() {
+            let grid_data = bytemuck::cast_slice(grid_vertices);
+            self.grid_buffer
+                .ensure_capacity(device, grid_data.len() as u64);
+            queue.write_buffer(&self.grid_buffer.buffer, 0, grid_data);
         }
     }
 
@@ -309,6 +326,17 @@ impl Pipeline {
         render_pass.set_pipeline(&self.line_pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.line_buffer.buffer.slice(..));
+        render_pass.draw(0..num_vertices, 0..1);
+    }
+
+    pub fn render_grid(&self, render_pass: &mut wgpu::RenderPass<'_>, num_vertices: u32) {
+        if num_vertices == 0 {
+            return;
+        }
+
+        render_pass.set_pipeline(&self.line_pipeline);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.grid_buffer.buffer.slice(..));
         render_pass.draw(0..num_vertices, 0..1);
     }
 }
