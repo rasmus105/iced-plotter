@@ -4,10 +4,10 @@ use crate::gpu_types::{RawPoint, Uniforms};
 use crate::pipeline::Pipeline;
 use crate::plotter::{ColorMode, PlotPoints, PlotSeries, Plotter, PlotterOptions};
 
+use iced::Rectangle;
 use iced::mouse::Cursor;
 use iced::wgpu;
 use iced::widget::shader::{self, Viewport};
-use iced::Rectangle;
 
 /// State for the shader program (zoom/pan state, etc.).
 #[derive(Default)]
@@ -40,7 +40,11 @@ pub struct PlotterPrimitive {
 
 impl PlotterPrimitive {
     /// Create a new primitive from plotter data.
-    pub fn new(series: &[PlotSeries], bounds: Rectangle, options: &PlotterOptions) -> Self {
+    pub fn new<'a>(
+        series: &'a [PlotSeries<'a>],
+        bounds: Rectangle,
+        options: &PlotterOptions,
+    ) -> Self {
         // Default to showing both markers and lines
         let config = RenderConfig {
             show_markers: true,
@@ -48,7 +52,7 @@ impl PlotterPrimitive {
         };
 
         // First pass: collect all points and calculate data ranges, tracking series boundaries
-        let mut all_points_with_colors: Vec<(f32, f32, ColorMode)> = Vec::new();
+        let mut all_points_with_colors: Vec<(f32, f32, ColorMode<'a>)> = Vec::new();
         let mut series_boundaries: Vec<usize> = Vec::new(); // Stores start index of each series
         let mut x_min = f32::INFINITY;
         let mut x_max = f32::NEG_INFINITY;
@@ -143,7 +147,7 @@ impl PlotterPrimitive {
 
     /// Apply color modes to raw point data, computing final RGBA colors.
     fn apply_color_mode(
-        points_with_colors: &[(f32, f32, ColorMode)],
+        points_with_colors: &[(f32, f32, ColorMode<'_>)],
         _x_min: f32,
         _x_max: f32,
         y_min: f32,

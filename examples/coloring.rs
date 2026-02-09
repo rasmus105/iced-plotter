@@ -1,9 +1,7 @@
-use iced::widget::{column, row, text, Container};
+use iced::widget::{Container, column, row, text};
 use iced::{Color, Element, Length, Theme};
 use iced_plotter::colormap::ColormapName;
-use iced_plotter::plotter::{
-    ColorMode, ExplicitGenerator, PlotPoints, PlotSeries, Plotter, PlotterOptions, SeriesStyle,
-};
+use iced_plotter::plotter::{ColorMode, PlotPoints, PlotSeries, Plotter, SeriesStyle};
 
 pub fn main() {
     iced::application(
@@ -26,51 +24,32 @@ struct ColoringExample<'a> {
 impl ColoringExample<'_> {
     pub fn default() -> Self {
         Self {
-            plotter: Plotter {
-                series: vec![
-                    // Value gradient based on Y (colored by the output of the function)
-                    PlotSeries {
-                        label: "sin(x) - Value Gradient".to_string(),
-                        style: SeriesStyle::new(ColorMode::ValueGradient {
-                            low: Color::from_rgb(0.2, 0.2, 0.8),
-                            high: Color::from_rgb(0.8, 0.2, 0.2),
-                            values: None,
-                        }),
-                        points: PlotPoints::Generator(ExplicitGenerator {
-                            function: Box::new(f32::sin),
-                            x_range: (0., 10.),
-                            points: 500,
-                        }),
-                    },
-                    // Index gradient (blue to yellow based on point position)
-                    PlotSeries {
-                        label: "cos(x) - Index Gradient".to_string(),
-                        style: SeriesStyle::new(ColorMode::IndexGradient {
-                            start: Color::from_rgb(0.2, 0.4, 0.8),
-                            end: Color::from_rgb(0.8, 0.8, 0.2),
-                        }),
-                        points: PlotPoints::Generator(ExplicitGenerator {
-                            function: Box::new(f32::cos),
-                            x_range: (0., 10.),
-                            points: 500,
-                        }),
-                    },
-                    // Using a colormap (viridis)
-                    PlotSeries {
-                        label: "sin(2x) - Viridis Colormap".to_string(),
-                        style: SeriesStyle::new(ColorMode::Colormap {
-                            name: ColormapName::Viridis,
-                            values: None,
-                        }),
-                        points: PlotPoints::Generator(ExplicitGenerator {
-                            function: Box::new(|x| (2.0 * x).sin()),
-                            x_range: (0., 10.),
-                            points: 500,
-                        }),
-                    },
-                ],
-                options: PlotterOptions::default(),
-            },
+            plotter: Plotter::new(vec![
+                // Value gradient based on Y (colored by the output of the function)
+                PlotSeries::new(
+                    "sin(x) - Value Gradient",
+                    PlotPoints::generator(f32::sin, (0.0, 10.0), 500),
+                )
+                .with_style(SeriesStyle::new(ColorMode::value_gradient(
+                    Color::from_rgb(0.2, 0.2, 0.8),
+                    Color::from_rgb(0.8, 0.2, 0.2),
+                ))),
+                // Index gradient (blue to yellow based on point position)
+                PlotSeries::new(
+                    "cos(x) - Index Gradient",
+                    PlotPoints::generator(f32::cos, (0.0, 10.0), 500),
+                )
+                .with_style(SeriesStyle::new(ColorMode::index_gradient(
+                    Color::from_rgb(0.2, 0.4, 0.8),
+                    Color::from_rgb(0.8, 0.8, 0.2),
+                ))),
+                // Using a colormap (viridis)
+                PlotSeries::new(
+                    "sin(2x) - Viridis Colormap",
+                    PlotPoints::generator(|x| (2.0 * x).sin(), (0.0, 10.0), 500),
+                )
+                .with_style(SeriesStyle::new(ColorMode::colormap(ColormapName::Viridis))),
+            ]),
         }
     }
 

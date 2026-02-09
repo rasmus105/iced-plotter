@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use iced::widget::shader;
 use iced::{Element, Length};
 
@@ -42,9 +44,9 @@ impl LinePattern {
 
 /// Styling options for a plot series
 #[derive(Clone, Debug)]
-pub struct SeriesStyle {
+pub struct SeriesStyle<'a> {
     /// How to color the points
-    pub color: ColorMode,
+    pub color: ColorMode<'a>,
     /// Shape of markers
     pub marker_shape: MarkerShape,
     /// Marker size in pixels
@@ -55,9 +57,9 @@ pub struct SeriesStyle {
     pub line_width: f32,
 }
 
-impl SeriesStyle {
+impl<'a> SeriesStyle<'a> {
     /// Create a new series style with defaults
-    pub fn new(color: ColorMode) -> Self {
+    pub fn new(color: ColorMode<'a>) -> Self {
         Self {
             color,
             marker_shape: MarkerShape::Circle,
@@ -92,10 +94,10 @@ impl SeriesStyle {
     }
 }
 
-impl Default for SeriesStyle {
+impl Default for SeriesStyle<'_> {
     fn default() -> Self {
         Self {
-            color: ColorMode::Solid(iced::Color::WHITE),
+            color: ColorMode::solid(iced::Color::WHITE),
             marker_shape: MarkerShape::Circle,
             marker_size: 4.0,
             line_pattern: LinePattern::Solid,
@@ -110,7 +112,7 @@ impl Default for SeriesStyle {
 
 /// How points in a series should be colored
 #[derive(Clone, Debug)]
-pub enum ColorMode {
+pub enum ColorMode<'a> {
     /// Single solid color for all points
     Solid(iced::Color),
 
@@ -122,7 +124,7 @@ pub enum ColorMode {
         high: iced::Color,
         /// Optional: use separate value array instead of Y coordinate
         /// If None, Y coordinate is used
-        values: Option<Vec<f32>>,
+        values: Option<Cow<'a, [f32]>>,
     },
 
     /// Gradient based on point index (0 = start, 1 = end)
@@ -139,14 +141,51 @@ pub enum ColorMode {
         name: crate::colormap::ColormapName,
         /// Optional: use separate value array instead of Y coordinate
         /// If None, Y coordinate is used
-        values: Option<Vec<f32>>,
+        values: Option<Cow<'a, [f32]>>,
     },
 }
 
-impl ColorMode {
+impl<'a> ColorMode<'a> {
     /// Convert a solid Color to ColorMode for convenience
     pub fn solid(color: iced::Color) -> Self {
         ColorMode::Solid(color)
+    }
+
+    pub fn value_gradient(low: iced::Color, high: iced::Color) -> Self {
+        ColorMode::ValueGradient {
+            low,
+            high,
+            values: None,
+        }
+    }
+
+    pub fn value_gradient_values<V>(low: iced::Color, high: iced::Color, values: V) -> Self
+    where
+        V: Into<Cow<'a, [f32]>>,
+    {
+        ColorMode::ValueGradient {
+            low,
+            high,
+            values: Some(values.into()),
+        }
+    }
+
+    pub fn index_gradient(start: iced::Color, end: iced::Color) -> Self {
+        ColorMode::IndexGradient { start, end }
+    }
+
+    pub fn colormap(name: crate::colormap::ColormapName) -> Self {
+        ColorMode::Colormap { name, values: None }
+    }
+
+    pub fn colormap_values<V>(name: crate::colormap::ColormapName, values: V) -> Self
+    where
+        V: Into<Cow<'a, [f32]>>,
+    {
+        ColorMode::Colormap {
+            name,
+            values: Some(values.into()),
+        }
     }
 }
 
@@ -158,6 +197,12 @@ impl ColorMode {
 pub struct PlotPoint {
     pub x: f32,
     pub y: f32,
+}
+
+impl From<(f32, f32)> for PlotPoint {
+    fn from((x, y): (f32, f32)) -> Self {
+        Self { x, y }
+    }
 }
 
 /// Describes a function y = f(x) with an optional range for x and a number of
@@ -174,6 +219,39 @@ pub enum PlotPoints<'a> {
     Generator(ExplicitGenerator<'a>),
 }
 
+impl<'a> PlotPoints<'a> {
+    pub fn owned(points: Vec<PlotPoint>) -> Self {
+        PlotPoints::Owned(points)
+    }
+
+    pub fn borrowed(points: &'a [PlotPoint]) -> Self {
+        PlotPoints::Borrowed(points)
+    }
+
+    pub fn generator<F>(function: F, x_range: (f32, f32), points: usize) -> Self
+    where
+        F: Fn(f32) -> f32 + 'a,
+    {
+        PlotPoints::Generator(ExplicitGenerator {
+            function: Box::new(function),
+            x_range,
+            points,
+        })
+    }
+}
+
+impl From<Vec<PlotPoint>> for PlotPoints<'_> {
+    fn from(points: Vec<PlotPoint>) -> Self {
+        PlotPoints::Owned(points)
+    }
+}
+
+impl<'a> From<&'a [PlotPoint]> for PlotPoints<'a> {
+    fn from(points: &'a [PlotPoint]) -> Self {
+        PlotPoints::Borrowed(points)
+    }
+}
+
 impl Default for PlotPoints<'_> {
     fn default() -> Self {
         PlotPoints::Owned(Vec::new())
@@ -182,8 +260,23 @@ impl Default for PlotPoints<'_> {
 
 pub struct PlotSeries<'a> {
     pub label: String,
-    pub style: SeriesStyle,
+    pub style: SeriesStyle<'a>,
     pub points: PlotPoints<'a>,
+}
+
+impl<'a> PlotSeries<'a> {
+    pub fn new(label: impl Into<String>, points: PlotPoints<'a>) -> Self {
+        Self {
+            label: label.into(),
+            style: SeriesStyle::default(),
+            points,
+        }
+    }
+
+    pub fn with_style(mut self, style: SeriesStyle<'a>) -> Self {
+        self.style = style;
+        self
+    }
 }
 
 // ================================================================================
@@ -219,11 +312,23 @@ pub struct Plotter<'a> {
 // Public Methods
 // ================================================================================
 
-impl Plotter<'_> {
+impl<'a> Plotter<'a> {
+    pub fn new(series: Vec<PlotSeries<'a>>) -> Self {
+        Self {
+            series,
+            options: PlotterOptions::default(),
+        }
+    }
+
+    pub fn with_options(mut self, options: PlotterOptions) -> Self {
+        self.options = options;
+        self
+    }
+
     /// Main function for drawing plotter in view using GPU shaders.
-    pub fn draw<'a, Message>(&'a self) -> Element<'a, Message>
+    pub fn draw<'view, Message>(&'view self) -> Element<'view, Message>
     where
-        Message: 'a,
+        Message: 'view,
     {
         shader(self).width(Length::Fill).height(Length::Fill).into()
     }

@@ -1,9 +1,7 @@
 use iced::time::{self, Duration};
-use iced::widget::{column, row, text, Container};
+use iced::widget::{Container, column, row, text};
 use iced::{Color, Element, Length, Subscription, Theme};
-use iced_plotter::plotter::{
-    ColorMode, PlotPoint, PlotPoints, PlotSeries, Plotter, PlotterOptions, SeriesStyle,
-};
+use iced_plotter::plotter::{ColorMode, PlotPoint, PlotPoints, PlotSeries, Plotter, SeriesStyle};
 
 pub fn main() {
     iced::application(
@@ -30,14 +28,11 @@ struct UpdatingGraph<'a> {
 impl UpdatingGraph<'_> {
     pub fn new() -> Self {
         Self {
-            plotter: Plotter {
-                series: vec![PlotSeries {
-                    label: "wave".to_string(),
-                    style: SeriesStyle::new(ColorMode::Solid(Color::from_rgb(0.2, 0.8, 0.4))),
-                    points: PlotPoints::Owned(Vec::new()),
-                }],
-                options: PlotterOptions::default(),
-            },
+            plotter: Plotter::new(vec![
+                PlotSeries::new("wave", PlotPoints::owned(Vec::new())).with_style(
+                    SeriesStyle::new(ColorMode::solid(Color::from_rgb(0.2, 0.8, 0.4))),
+                ),
+            ]),
             time: 0.0,
         }
     }

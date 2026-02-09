@@ -1,8 +1,6 @@
-use iced::widget::{column, row, text, Container};
+use iced::widget::{Container, column, row, text};
 use iced::{Color, Element, Length, Theme};
-use iced_plotter::plotter::{
-    ColorMode, ExplicitGenerator, PlotPoints, PlotSeries, Plotter, PlotterOptions, SeriesStyle,
-};
+use iced_plotter::plotter::{ColorMode, PlotPoints, PlotSeries, Plotter, SeriesStyle};
 
 pub fn main() {
     iced::application(StaticGraph::default, StaticGraph::update, StaticGraph::view)
@@ -21,18 +19,12 @@ struct StaticGraph<'a> {
 impl StaticGraph<'_> {
     pub fn default() -> Self {
         Self {
-            plotter: Plotter {
-                series: vec![PlotSeries {
-                    label: "sin(x)".to_string(),
-                    style: SeriesStyle::new(ColorMode::Solid(Color::from_rgb(0.8, 0.4, 0.2))),
-                    points: PlotPoints::Generator(ExplicitGenerator {
-                        function: Box::new(f32::sin),
-                        x_range: (0., 10.),
-                        points: 1000,
-                    }),
-                }],
-                options: PlotterOptions::default(),
-            },
+            plotter: Plotter::new(vec![
+                PlotSeries::new("sin(x)", PlotPoints::generator(f32::sin, (0.0, 10.0), 1000))
+                    .with_style(SeriesStyle::new(ColorMode::solid(Color::from_rgb(
+                        0.8, 0.4, 0.2,
+                    )))),
+            ]),
         }
     }
 
