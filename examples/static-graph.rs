@@ -1,6 +1,8 @@
-use iced::widget::{Container, column, row, text};
+use iced::widget::{column, row, text, Container};
 use iced::{Color, Element, Length, Theme};
-use iced_plotter::plotter::{ColorMode, PlotPoints, PlotSeries, Plotter, SeriesStyle};
+use iced_plotter::plotter::{
+    ColorMode, InteractionConfig, PlotPoints, PlotSeries, Plotter, SeriesStyle, ViewState,
+};
 
 pub fn main() {
     iced::application(StaticGraph::default, StaticGraph::update, StaticGraph::view)
@@ -9,36 +11,51 @@ pub fn main() {
         .unwrap()
 }
 
-#[derive(Debug)]
-enum Message {}
-
-struct StaticGraph<'a> {
-    plotter: Plotter<'a>,
+#[derive(Debug, Clone)]
+enum Message {
+    ViewChanged(ViewState),
 }
 
-impl StaticGraph<'_> {
+struct StaticGraph {
+    view_state: ViewState,
+}
+
+impl StaticGraph {
     pub fn default() -> Self {
         Self {
-            plotter: Plotter::new(vec![
-                PlotSeries::new("sin(x)", PlotPoints::generator(f32::sin, (0.0, 10.0), 1000))
-                    .with_style(SeriesStyle::new(ColorMode::solid(Color::from_rgb(
-                        0.8, 0.4, 0.2,
-                    )))),
-            ]),
+            view_state: ViewState::auto_fit(),
         }
     }
 
-    pub fn update(&mut self, _message: Message) {}
+    pub fn update(&mut self, message: Message) {
+        match message {
+            Message::ViewChanged(new_view) => {
+                self.view_state = new_view;
+            }
+        }
+    }
 
     pub fn view(&self) -> Element<'_, Message> {
         let panel = column![text("Column 1"), text("Column 2"), text("Column 3"),];
 
+        let plotter = Plotter::new(
+            vec![
+                PlotSeries::new("sin(x)", PlotPoints::generator(f32::sin, (0.0, 10.0), 1000))
+                    .with_style(SeriesStyle::new(ColorMode::solid(Color::from_rgb(
+                        0.8, 0.4, 0.2,
+                    )))),
+            ],
+            &self.view_state,
+        )
+        .with_interaction(InteractionConfig::full())
+        .on_view_change(Message::ViewChanged);
+
         row![
-            Container::new(self.plotter.draw())
-                .width(Length::FillPortion(3)) // 3/4 of space
+            Container::new(plotter.draw())
+                .width(Length::FillPortion(3))
                 .height(Length::Fill),
             Container::new(panel)
-                .width(Length::FillPortion(1)) // 1/4 of space
+                .width(Length::FillPortion(1))
                 .height(Length::Fill),
         ]
         .width(Length::Fill)

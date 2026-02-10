@@ -2,19 +2,49 @@
 
 use crate::gpu_types::{RawPoint, Uniforms};
 use crate::pipeline::Pipeline;
-use crate::plotter::{ColorMode, PlotPoints, PlotSeries, Plotter, PlotterOptions};
+use crate::plotter::{ColorMode, PlotPoints, PlotSeries, Plotter, PlotterOptions, ViewState};
 use crate::ticks::compute_ticks;
 
-use iced::Rectangle;
 use iced::mouse::Cursor;
 use iced::wgpu;
 use iced::widget::shader::{self, Viewport};
+use iced::{mouse, Event, Point, Rectangle};
 
-/// State for the shader program (zoom/pan state, etc.).
+// ================================================================================
+// Interaction State
+// ================================================================================
+
+/// Tracks which interaction mode the user is currently in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InteractionMode {
+    Idle,
+    Panning,
+}
+
+impl Default for InteractionMode {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+/// State for the shader program (persists across frames via iced's widget tree).
 #[derive(Default)]
 pub struct PlotterState {
-    pub is_dragging: bool,
+    /// Current interaction mode.
+    pub interaction_mode: InteractionMode,
+    /// Screen position where the drag started.
+    pub drag_start: Option<Point>,
+    /// View state snapshot at the start of a drag (for computing deltas).
+    pub drag_start_view: Option<ViewState>,
+    /// Last known cursor position (screen coords).
+    pub last_cursor: Option<Point>,
+    /// Timestamp of last click for double-click detection.
+    pub last_click_time: Option<std::time::Instant>,
 }
+
+// ================================================================================
+// Render Config & Primitive
+// ================================================================================
 
 /// Configuration for what to render.
 #[derive(Clone, Copy, Debug, Default)]
@@ -50,44 +80,44 @@ pub struct PlotterPrimitive {
 
 impl PlotterPrimitive {
     /// Create a new primitive from plotter data.
+    ///
+    /// `view_x_range` and `view_y_range` are the resolved visible ranges
+    /// (already accounting for ViewState auto-fit).
     pub fn new<'a>(
         series: &'a [PlotSeries<'a>],
         bounds: Rectangle,
         options: &PlotterOptions,
+        view_x_range: [f32; 2],
+        view_y_range: [f32; 2],
     ) -> Self {
-        // Default to showing both markers and lines
         let config = RenderConfig {
             show_markers: true,
             show_lines: true,
         };
 
-        // First pass: collect all points and calculate data ranges, tracking series boundaries
+        // Collect all points with color info, tracking series boundaries
         let mut all_points_with_colors: Vec<(f32, f32, ColorMode<'a>)> = Vec::new();
-        let mut series_boundaries: Vec<usize> = Vec::new(); // Stores start index of each series
-        let mut x_min = f32::INFINITY;
-        let mut x_max = f32::NEG_INFINITY;
-        let mut y_min = f32::INFINITY;
-        let mut y_max = f32::NEG_INFINITY;
+        let mut series_boundaries: Vec<usize> = Vec::new();
+
+        // We still need data-space min/max for color gradient normalization
+        let mut data_y_min = f32::INFINITY;
+        let mut data_y_max = f32::NEG_INFINITY;
 
         for s in series {
-            series_boundaries.push(all_points_with_colors.len()); // Record start of this series
+            series_boundaries.push(all_points_with_colors.len());
             match &s.points {
                 PlotPoints::Owned(points) => {
                     for p in points {
                         all_points_with_colors.push((p.x, p.y, s.style.color.clone()));
-                        x_min = x_min.min(p.x);
-                        x_max = x_max.max(p.x);
-                        y_min = y_min.min(p.y);
-                        y_max = y_max.max(p.y);
+                        data_y_min = data_y_min.min(p.y);
+                        data_y_max = data_y_max.max(p.y);
                     }
                 }
                 PlotPoints::Borrowed(points) => {
                     for p in *points {
                         all_points_with_colors.push((p.x, p.y, s.style.color.clone()));
-                        x_min = x_min.min(p.x);
-                        x_max = x_max.max(p.x);
-                        y_min = y_min.min(p.y);
-                        y_max = y_max.max(p.y);
+                        data_y_min = data_y_min.min(p.y);
+                        data_y_max = data_y_max.max(p.y);
                     }
                 }
                 PlotPoints::Generator(generator) => {
@@ -98,48 +128,45 @@ impl PlotterPrimitive {
                         let x = x_min_range + t * x_span;
                         let y = (generator.function)(x);
                         all_points_with_colors.push((x, y, s.style.color.clone()));
-                        x_min = x_min.min(x);
-                        x_max = x_max.max(x);
-                        y_min = y_min.min(y);
-                        y_max = y_max.max(y);
+                        data_y_min = data_y_min.min(y);
+                        data_y_max = data_y_max.max(y);
                     }
                 }
             }
         }
 
-        // Handle empty data and constant y values
+        // Handle empty data
         if all_points_with_colors.is_empty() {
-            x_min = 0.0;
-            x_max = 1.0;
-            y_min = 0.0;
-            y_max = 1.0;
-        } else if (y_max - y_min).abs() < f32::EPSILON {
-            // Handle constant y values
-            y_min -= 0.5;
-            y_max += 0.5;
+            data_y_min = 0.0;
+            data_y_max = 1.0;
+        } else if (data_y_max - data_y_min).abs() < f32::EPSILON {
+            data_y_min -= 0.5;
+            data_y_max += 0.5;
         }
 
-        // Use padding from options, with a default
         let padding = options.padding;
-
-        // Get marker radius and line width from the first series (if available)
         let marker_radius = series.first().map(|s| s.style.marker_size).unwrap_or(4.0);
         let line_width = series.first().map(|s| s.style.line_width).unwrap_or(2.0);
 
+        // Use the view ranges (not data ranges) for rendering
         let uniforms = Uniforms {
             viewport_size: [bounds.width, bounds.height],
-            x_range: [x_min, x_max],
-            y_range: [y_min, y_max],
+            x_range: view_x_range,
+            y_range: view_y_range,
             padding: [padding, padding],
             marker_radius,
             line_width,
         };
 
-        // Second pass: convert points with color mode to final RawPoints
-        let all_points =
-            Self::apply_color_mode(&all_points_with_colors, x_min, x_max, y_min, y_max);
+        // Apply color mode using *data* y range for gradient normalization
+        let all_points = Self::apply_color_mode(
+            &all_points_with_colors,
+            view_x_range[0],
+            view_x_range[1],
+            data_y_min,
+            data_y_max,
+        );
 
-        // Generate line vertices (thick lines as quads), passing series boundaries
         let line_vertices = if config.show_lines {
             Self::generate_line_vertices(&all_points, &series_boundaries, &uniforms)
         } else {
@@ -148,8 +175,8 @@ impl PlotterPrimitive {
 
         let grid_vertices = Self::generate_grid_vertices(options, &uniforms);
 
-        let x_ticks = compute_ticks(x_min, x_max, &options.x_axis.ticks);
-        let y_ticks = compute_ticks(y_min, y_max, &options.y_axis.ticks);
+        let x_ticks = compute_ticks(view_x_range[0], view_x_range[1], &options.x_axis.ticks);
+        let y_ticks = compute_ticks(view_y_range[0], view_y_range[1], &options.y_axis.ticks);
         let tick_info = TickInfo { x_ticks, y_ticks };
 
         Self {
@@ -263,7 +290,6 @@ impl PlotterPrimitive {
         let y_range = uniforms.y_range;
         let half_width = uniforms.line_width / 2.0;
 
-        // Convert data coords to screen coords
         let to_screen = |x: f32, y: f32| -> (f32, f32) {
             let x_norm = (x - x_range[0]) / (x_range[1] - x_range[0]);
             let y_norm = (y - y_range[0]) / (y_range[1] - y_range[0]);
@@ -272,7 +298,6 @@ impl PlotterPrimitive {
             (screen_x, screen_y)
         };
 
-        // Process each series independently to avoid lines between series
         for series_idx in 0..series_boundaries.len() {
             let start_idx = series_boundaries[series_idx];
             let end_idx = if series_idx + 1 < series_boundaries.len() {
@@ -281,7 +306,10 @@ impl PlotterPrimitive {
                 points.len()
             };
 
-            // Generate lines within this series only
+            if end_idx <= start_idx + 1 {
+                continue;
+            }
+
             for window_idx in start_idx..end_idx - 1 {
                 let p0 = &points[window_idx];
                 let p1 = &points[window_idx + 1];
@@ -294,30 +322,26 @@ impl PlotterPrimitive {
                 let (sx0, sy0) = to_screen(x0, y0);
                 let (sx1, sy1) = to_screen(x1, y1);
 
-                // Calculate perpendicular direction
                 let dx = sx1 - sx0;
                 let dy = sy1 - sy0;
                 let len = (dx * dx + dy * dy).sqrt();
 
                 if len < 0.001 {
-                    continue; // Skip zero-length segments
+                    continue;
                 }
 
                 let nx = -dy / len * half_width;
                 let ny = dx / len * half_width;
 
-                // Create quad (2 triangles)
                 let v0 = RawPoint::new(sx0 + nx, sy0 + ny, color);
                 let v1 = RawPoint::new(sx0 - nx, sy0 - ny, color);
                 let v2 = RawPoint::new(sx1 + nx, sy1 + ny, color);
                 let v3 = RawPoint::new(sx1 - nx, sy1 - ny, color);
 
-                // Triangle 1
                 vertices.push(v0);
                 vertices.push(v1);
                 vertices.push(v2);
 
-                // Triangle 2
                 vertices.push(v1);
                 vertices.push(v3);
                 vertices.push(v2);
@@ -337,36 +361,35 @@ impl PlotterPrimitive {
         let x_range = uniforms.x_range;
         let y_range = uniforms.y_range;
 
-        let push_line_quad =
-            |vertices: &mut Vec<RawPoint>,
-             x0: f32,
-             y0: f32,
-             x1: f32,
-             y1: f32,
-             half_width: f32,
-             color: [f32; 4]| {
-                let dx = x1 - x0;
-                let dy = y1 - y0;
-                let len = (dx * dx + dy * dy).sqrt();
-                if len < 0.001 {
-                    return;
-                }
-                let nx = -dy / len * half_width;
-                let ny = dx / len * half_width;
+        let push_line_quad = |vertices: &mut Vec<RawPoint>,
+                              x0: f32,
+                              y0: f32,
+                              x1: f32,
+                              y1: f32,
+                              half_width: f32,
+                              color: [f32; 4]| {
+            let dx = x1 - x0;
+            let dy = y1 - y0;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 0.001 {
+                return;
+            }
+            let nx = -dy / len * half_width;
+            let ny = dx / len * half_width;
 
-                let v0 = RawPoint::new(x0 + nx, y0 + ny, color);
-                let v1 = RawPoint::new(x0 - nx, y0 - ny, color);
-                let v2 = RawPoint::new(x1 + nx, y1 + ny, color);
-                let v3 = RawPoint::new(x1 - nx, y1 - ny, color);
+            let v0 = RawPoint::new(x0 + nx, y0 + ny, color);
+            let v1 = RawPoint::new(x0 - nx, y0 - ny, color);
+            let v2 = RawPoint::new(x1 + nx, y1 + ny, color);
+            let v3 = RawPoint::new(x1 - nx, y1 - ny, color);
 
-                vertices.push(v0);
-                vertices.push(v1);
-                vertices.push(v2);
+            vertices.push(v0);
+            vertices.push(v1);
+            vertices.push(v2);
 
-                vertices.push(v1);
-                vertices.push(v3);
-                vertices.push(v2);
-            };
+            vertices.push(v1);
+            vertices.push(v3);
+            vertices.push(v2);
+        };
 
         if options.grid.show {
             let grid_color = [
@@ -458,6 +481,64 @@ impl PlotterPrimitive {
     }
 }
 
+// ================================================================================
+// Coordinate conversion helpers
+// ================================================================================
+
+/// Convert screen coordinates to data coordinates.
+fn screen_to_data(
+    screen: Point,
+    bounds: Rectangle,
+    view_x: [f32; 2],
+    view_y: [f32; 2],
+    padding: f32,
+) -> (f32, f32) {
+    let plot_width = bounds.width - 2.0 * padding;
+    let plot_height = bounds.height - 2.0 * padding;
+    let x_norm = (screen.x - bounds.x - padding) / plot_width;
+    let y_norm = 1.0 - (screen.y - bounds.y - padding) / plot_height;
+    let x = view_x[0] + x_norm * (view_x[1] - view_x[0]);
+    let y = view_y[0] + y_norm * (view_y[1] - view_y[0]);
+    (x, y)
+}
+
+/// Clamp a view range to bounds, keeping the range size the same (shift rather than squash).
+fn clamp_range_to_bounds(
+    range: (f32, f32),
+    bounds: Option<(f32, f32)>,
+    padding_frac: f32,
+) -> (f32, f32) {
+    let (mut lo, mut hi) = range;
+    if let Some((b_lo, b_hi)) = bounds {
+        let pad = (b_hi - b_lo) * padding_frac;
+        let min_bound = b_lo - pad;
+        let max_bound = b_hi + pad;
+        let range_size = hi - lo;
+
+        // If the view is wider than bounds+padding, just center it
+        if range_size >= (max_bound - min_bound) {
+            let center = (min_bound + max_bound) / 2.0;
+            lo = center - range_size / 2.0;
+            hi = center + range_size / 2.0;
+        } else {
+            // Shift to stay within bounds
+            if lo < min_bound {
+                lo = min_bound;
+                hi = lo + range_size;
+            }
+            if hi > max_bound {
+                hi = max_bound;
+                lo = hi - range_size;
+            }
+        }
+    }
+    (lo, hi)
+}
+
+// ================================================================================
+// shader::Primitive implementation
+// ================================================================================
+
 impl shader::Primitive for PlotterPrimitive {
     type Pipeline = Pipeline;
 
@@ -502,11 +583,253 @@ impl shader::Pipeline for Pipeline {
     }
 }
 
-impl<Message> shader::Program<Message> for Plotter<'_> {
+// ================================================================================
+// shader::Program implementation (event handling + drawing)
+// ================================================================================
+
+impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
     type State = PlotterState;
     type Primitive = PlotterPrimitive;
 
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<shader::Action<Message>> {
+        let interaction = &self.interaction;
+
+        // Check if any interaction is enabled at all
+        let has_any_interaction = interaction.pan_x
+            || interaction.pan_y
+            || interaction.zoom_x
+            || interaction.zoom_y
+            || interaction.double_click_to_fit;
+
+        if !has_any_interaction {
+            return None;
+        }
+
+        let (view_x, view_y, _data_x, _data_y) = self.resolve_view_ranges();
+        let padding = self.options.padding;
+
+        match event {
+            // ---- Mouse button press ----
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if let Some(pos) = cursor.position_in(bounds) {
+                    // Double-click detection
+                    if interaction.double_click_to_fit {
+                        let now = std::time::Instant::now();
+                        if let Some(last) = state.last_click_time {
+                            if now.duration_since(last).as_millis() < 300 {
+                                // Double-click: reset to auto-fit
+                                state.last_click_time = None;
+                                state.interaction_mode = InteractionMode::Idle;
+
+                                if let Some(ref on_change) = self.on_view_change {
+                                    let new_view = ViewState {
+                                        x_range: if interaction.pan_x || interaction.zoom_x {
+                                            None
+                                        } else {
+                                            self.view_state.x_range
+                                        },
+                                        y_range: if interaction.pan_y || interaction.zoom_y {
+                                            None
+                                        } else {
+                                            self.view_state.y_range
+                                        },
+                                    };
+                                    return Some(
+                                        shader::Action::publish((on_change)(new_view))
+                                            .and_capture(),
+                                    );
+                                }
+                                return Some(shader::Action::capture());
+                            }
+                        }
+                        state.last_click_time = Some(now);
+                    }
+
+                    // Start panning
+                    if interaction.pan_x || interaction.pan_y {
+                        state.interaction_mode = InteractionMode::Panning;
+                        state.drag_start = Some(pos);
+                        state.drag_start_view = Some(ViewState {
+                            x_range: Some((view_x[0], view_x[1])),
+                            y_range: Some((view_y[0], view_y[1])),
+                        });
+                        return Some(shader::Action::capture());
+                    }
+                }
+                None
+            }
+
+            // ---- Mouse button release ----
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if state.interaction_mode == InteractionMode::Panning {
+                    state.interaction_mode = InteractionMode::Idle;
+                    state.drag_start = None;
+                    state.drag_start_view = None;
+                    return Some(shader::Action::capture());
+                }
+                None
+            }
+
+            // ---- Mouse move (drag) ----
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                state.last_cursor = Some(*position);
+
+                if state.interaction_mode == InteractionMode::Panning {
+                    if let (Some(start), Some(start_view)) =
+                        (state.drag_start, &state.drag_start_view)
+                    {
+                        let start_view_x = start_view.x_range.unwrap();
+                        let start_view_y = start_view.y_range.unwrap();
+
+                        let plot_width = bounds.width - 2.0 * padding;
+                        let plot_height = bounds.height - 2.0 * padding;
+
+                        // Position is absolute screen coords; drag_start is relative to bounds
+                        let current = Point::new(position.x - bounds.x, position.y - bounds.y);
+                        let dx_screen = current.x - start.x;
+                        let dy_screen = current.y - start.y;
+
+                        // Convert screen delta to data delta
+                        let dx_data = -dx_screen / plot_width * (start_view_x.1 - start_view_x.0);
+                        let dy_data = dy_screen / plot_height * (start_view_y.1 - start_view_y.0);
+
+                        let mut new_view = self.view_state.clone();
+
+                        if interaction.pan_x {
+                            let new_x = clamp_range_to_bounds(
+                                (start_view_x.0 + dx_data, start_view_x.1 + dx_data),
+                                interaction.x_bounds,
+                                interaction.boundary_padding,
+                            );
+                            new_view.x_range = Some(new_x);
+                        }
+
+                        if interaction.pan_y {
+                            let new_y = clamp_range_to_bounds(
+                                (start_view_y.0 + dy_data, start_view_y.1 + dy_data),
+                                interaction.y_bounds,
+                                interaction.boundary_padding,
+                            );
+                            new_view.y_range = Some(new_y);
+                        }
+
+                        if let Some(ref on_change) = self.on_view_change {
+                            return Some(
+                                shader::Action::publish((on_change)(new_view)).and_capture(),
+                            );
+                        }
+                        return Some(shader::Action::capture());
+                    }
+                }
+                None
+            }
+
+            // ---- Scroll wheel (zoom) ----
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                if !interaction.zoom_x && !interaction.zoom_y {
+                    return None;
+                }
+
+                // Only zoom if cursor is within bounds
+                let cursor_pos = match cursor.position_in(bounds) {
+                    Some(pos) => pos,
+                    None => return None,
+                };
+
+                let scroll_y = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => *y,
+                    mouse::ScrollDelta::Pixels { y, .. } => *y / 50.0,
+                };
+
+                if scroll_y.abs() < f32::EPSILON {
+                    return None;
+                }
+
+                // Zoom factor: positive scroll = zoom in (shrink range)
+                let factor = 1.0 - scroll_y * interaction.zoom_speed;
+                let factor = factor.clamp(0.1, 10.0); // safety clamp
+
+                // Get cursor position in data space (zoom center)
+                let (cx, cy) = screen_to_data(cursor_pos, bounds, view_x, view_y, padding);
+
+                let mut new_view = self.view_state.clone();
+
+                if interaction.zoom_x {
+                    let new_lo = cx - (cx - view_x[0]) * factor;
+                    let new_hi = cx + (view_x[1] - cx) * factor;
+                    let clamped = clamp_range_to_bounds(
+                        (new_lo, new_hi),
+                        interaction.x_bounds,
+                        interaction.boundary_padding,
+                    );
+                    new_view.x_range = Some(clamped);
+                }
+
+                if interaction.zoom_y {
+                    let new_lo = cy - (cy - view_y[0]) * factor;
+                    let new_hi = cy + (view_y[1] - cy) * factor;
+                    let clamped = clamp_range_to_bounds(
+                        (new_lo, new_hi),
+                        interaction.y_bounds,
+                        interaction.boundary_padding,
+                    );
+                    new_view.y_range = Some(clamped);
+                }
+
+                // For axes with auto-fit that are not being zoomed,
+                // keep them as None (auto-fit)
+                if !interaction.zoom_x && self.view_state.x_range.is_none() {
+                    new_view.x_range = None;
+                }
+                if !interaction.zoom_y && self.view_state.y_range.is_none() {
+                    new_view.y_range = None;
+                }
+
+                if let Some(ref on_change) = self.on_view_change {
+                    return Some(shader::Action::publish((on_change)(new_view)).and_capture());
+                }
+                return Some(shader::Action::capture());
+            }
+
+            _ => None,
+        }
+    }
+
     fn draw(&self, _state: &Self::State, _cursor: Cursor, bounds: Rectangle) -> Self::Primitive {
-        PlotterPrimitive::new(&self.series, bounds, &self.options)
+        let (view_x, view_y, _, _) = self.resolve_view_ranges();
+        PlotterPrimitive::new(&self.series, bounds, &self.options, view_x, view_y)
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        let has_any = self.interaction.pan_x
+            || self.interaction.pan_y
+            || self.interaction.zoom_x
+            || self.interaction.zoom_y;
+
+        if !has_any {
+            return mouse::Interaction::default();
+        }
+
+        match state.interaction_mode {
+            InteractionMode::Panning => mouse::Interaction::Grabbing,
+            InteractionMode::Idle => {
+                if cursor.is_over(bounds) {
+                    mouse::Interaction::Grab
+                } else {
+                    mouse::Interaction::default()
+                }
+            }
+        }
     }
 }

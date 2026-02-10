@@ -1,7 +1,10 @@
 use iced::time::{self, Duration};
-use iced::widget::{Container, column, row, text};
+use iced::widget::{column, row, text, Container};
 use iced::{Color, Element, Length, Subscription, Theme};
-use iced_plotter::plotter::{ColorMode, PlotPoint, PlotPoints, PlotSeries, Plotter, SeriesStyle};
+use iced_plotter::plotter::{
+    ColorMode, InteractionConfig, PlotPoint, PlotPoints, PlotSeries, Plotter, SeriesStyle,
+    ViewState,
+};
 
 pub fn main() {
     iced::application(
@@ -18,22 +21,21 @@ pub fn main() {
 #[derive(Debug, Clone)]
 enum Message {
     Tick,
+    ViewChanged(ViewState),
 }
 
-struct UpdatingGraph<'a> {
-    plotter: Plotter<'a>,
+struct UpdatingGraph {
+    points: Vec<PlotPoint>,
     time: f32,
+    view_state: ViewState,
 }
 
-impl UpdatingGraph<'_> {
+impl UpdatingGraph {
     pub fn new() -> Self {
         Self {
-            plotter: Plotter::new(vec![
-                PlotSeries::new("wave", PlotPoints::owned(Vec::new())).with_style(
-                    SeriesStyle::new(ColorMode::solid(Color::from_rgb(0.2, 0.8, 0.4))),
-                ),
-            ]),
+            points: Vec::new(),
             time: 0.0,
+            view_state: ViewState::auto_fit(),
         }
     }
 
@@ -44,37 +46,25 @@ impl UpdatingGraph<'_> {
     pub fn update(&mut self, message: Message) {
         match message {
             Message::Tick => {
-                // Add a new point based on current time
                 let x = self.time;
                 let y = (x * 0.001).sin() + (x * 0.000314).cos() * 6.28;
 
-                // Get mutable access to the first series' owned points
-                if let Some(series) = self.plotter.series.get_mut(0)
-                    && let PlotPoints::Owned(ref mut points) = series.points
-                {
-                    points.push(PlotPoint { x, y });
+                self.points.push(PlotPoint { x, y });
 
-                    // Keep last x points for a sliding window effect
-                    if points.len() > 100000 {
-                        points.remove(0);
-                    }
+                if self.points.len() > 100000 {
+                    self.points.remove(0);
                 }
 
                 self.time += 0.1;
+            }
+            Message::ViewChanged(new_view) => {
+                self.view_state = new_view;
             }
         }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let point_count = self
-            .plotter
-            .series
-            .first()
-            .map(|s| match &s.points {
-                PlotPoints::Owned(points) => points.len(),
-                _ => 0,
-            })
-            .unwrap_or(0);
+        let point_count = self.points.len();
 
         let info = column![
             text("Updating Graph"),
@@ -83,8 +73,19 @@ impl UpdatingGraph<'_> {
         ]
         .spacing(10);
 
+        let plotter = Plotter::new(
+            vec![
+                PlotSeries::new("wave", PlotPoints::borrowed(&self.points)).with_style(
+                    SeriesStyle::new(ColorMode::solid(Color::from_rgb(0.2, 0.8, 0.4))),
+                ),
+            ],
+            &self.view_state,
+        )
+        .with_interaction(InteractionConfig::pan_x_autofit_y())
+        .on_view_change(Message::ViewChanged);
+
         row![
-            Container::new(self.plotter.draw())
+            Container::new(plotter.draw())
                 .width(Length::FillPortion(3))
                 .height(Length::Fill),
             Container::new(info)

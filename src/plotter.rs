@@ -6,6 +6,126 @@ use iced::widget::stack;
 use iced::{Element, Font, Length, Point, Renderer, Theme};
 
 // ================================================================================
+// Interaction Types
+// ================================================================================
+
+/// Represents the visible range of the plot.
+///
+/// Each axis range is `Option` — `None` means "auto-fit to data bounds".
+/// This allows the common pattern of panning X while auto-fitting Y.
+///
+/// Owned by the user's application state and passed to [`Plotter`].
+#[derive(Clone, Debug, Default)]
+pub struct ViewState {
+    /// Visible X range. `None` = auto-fit to data bounds.
+    pub x_range: Option<(f32, f32)>,
+    /// Visible Y range. `None` = auto-fit to data bounds.
+    pub y_range: Option<(f32, f32)>,
+}
+
+impl ViewState {
+    /// Create a new ViewState with both axes auto-fitting to data.
+    pub fn auto_fit() -> Self {
+        Self {
+            x_range: None,
+            y_range: None,
+        }
+    }
+
+    /// Create a new ViewState with explicit ranges for both axes.
+    pub fn with_ranges(x_range: (f32, f32), y_range: (f32, f32)) -> Self {
+        Self {
+            x_range: Some(x_range),
+            y_range: Some(y_range),
+        }
+    }
+
+    /// Set the X range (or None to auto-fit).
+    pub fn with_x_range(mut self, range: Option<(f32, f32)>) -> Self {
+        self.x_range = range;
+        self
+    }
+
+    /// Set the Y range (or None to auto-fit).
+    pub fn with_y_range(mut self, range: Option<(f32, f32)>) -> Self {
+        self.y_range = range;
+        self
+    }
+}
+
+/// Configuration for what interactions are enabled on the plot.
+#[derive(Clone, Debug)]
+pub struct InteractionConfig {
+    /// Allow panning along the X axis.
+    pub pan_x: bool,
+    /// Allow panning along the Y axis.
+    pub pan_y: bool,
+    /// Allow zooming along the X axis.
+    pub zoom_x: bool,
+    /// Allow zooming along the Y axis.
+    pub zoom_y: bool,
+    /// Hard limits for X scrolling. `None` = no limits.
+    pub x_bounds: Option<(f32, f32)>,
+    /// Hard limits for Y scrolling. `None` = no limits.
+    pub y_bounds: Option<(f32, f32)>,
+    /// Percentage of visible range to show as padding beyond data bounds (0.0 - 1.0).
+    pub boundary_padding: f32,
+    /// Zoom speed multiplier (default 0.1 = 10% per scroll tick).
+    pub zoom_speed: f32,
+    /// Enable double-click to reset view (fit all data).
+    pub double_click_to_fit: bool,
+}
+
+impl Default for InteractionConfig {
+    fn default() -> Self {
+        Self {
+            pan_x: true,
+            pan_y: false,
+            zoom_x: true,
+            zoom_y: false,
+            x_bounds: None,
+            y_bounds: None,
+            boundary_padding: 0.05,
+            zoom_speed: 0.1,
+            double_click_to_fit: true,
+        }
+    }
+}
+
+impl InteractionConfig {
+    /// No interactions enabled.
+    pub fn none() -> Self {
+        Self {
+            pan_x: false,
+            pan_y: false,
+            zoom_x: false,
+            zoom_y: false,
+            x_bounds: None,
+            y_bounds: None,
+            boundary_padding: 0.05,
+            zoom_speed: 0.1,
+            double_click_to_fit: false,
+        }
+    }
+
+    /// Pan and zoom on both axes.
+    pub fn full() -> Self {
+        Self {
+            pan_x: true,
+            pan_y: true,
+            zoom_x: true,
+            zoom_y: true,
+            ..Self::default()
+        }
+    }
+
+    /// Pan X, auto-fit Y (common for time-series).
+    pub fn pan_x_autofit_y() -> Self {
+        Self::default()
+    }
+}
+
+// ================================================================================
 // Style Types
 // ================================================================================
 
@@ -381,24 +501,33 @@ impl Default for PlotterOptions {
     }
 }
 
-#[derive(Default)]
-pub struct Plotter<'a> {
+pub struct Plotter<'a, Message> {
     // data related
     pub series: Vec<PlotSeries<'a>>,
 
     // configuration related
     pub options: PlotterOptions,
+
+    // interaction
+    pub view_state: &'a ViewState,
+    pub interaction: InteractionConfig,
+
+    // callback: maps a new ViewState to the user's Message type
+    pub(crate) on_view_change: Option<Box<dyn Fn(ViewState) -> Message + 'a>>,
 }
 
 // ================================================================================
 // Public Methods
 // ================================================================================
 
-impl<'a> Plotter<'a> {
-    pub fn new(series: Vec<PlotSeries<'a>>) -> Self {
+impl<'a, Message> Plotter<'a, Message> {
+    pub fn new(series: Vec<PlotSeries<'a>>, view_state: &'a ViewState) -> Self {
         Self {
             series,
             options: PlotterOptions::default(),
+            view_state,
+            interaction: InteractionConfig::default(),
+            on_view_change: None,
         }
     }
 
@@ -407,7 +536,20 @@ impl<'a> Plotter<'a> {
         self
     }
 
-    fn compute_data_ranges(&self) -> ([f32; 2], [f32; 2]) {
+    pub fn with_interaction(mut self, interaction: InteractionConfig) -> Self {
+        self.interaction = interaction;
+        self
+    }
+
+    /// Set a callback that maps view state changes to your app's Message type.
+    /// Without this, pan/zoom interactions will not be communicated back.
+    pub fn on_view_change(mut self, f: impl Fn(ViewState) -> Message + 'a) -> Self {
+        self.on_view_change = Some(Box::new(f));
+        self
+    }
+
+    /// Compute the bounding box of all data points.
+    pub fn compute_data_ranges(&self) -> ([f32; 2], [f32; 2]) {
         let mut x_min = f32::INFINITY;
         let mut x_max = f32::NEG_INFINITY;
         let mut y_min = f32::INFINITY;
@@ -450,24 +592,49 @@ impl<'a> Plotter<'a> {
         ([x_min, x_max], [y_min, y_max])
     }
 
-    pub fn draw<'view, Message>(&'view self) -> Element<'view, Message>
-    where
-        Message: 'view,
-    {
-        let (x_range, y_range) = self.compute_data_ranges();
-        let x_ticks = crate::ticks::compute_ticks(x_range[0], x_range[1], &self.options.x_axis.ticks);
-        let y_ticks = crate::ticks::compute_ticks(y_range[0], y_range[1], &self.options.y_axis.ticks);
+    /// Resolve the actual view ranges by combining ViewState with data bounds.
+    /// Returns (view_x_range, view_y_range, data_x_range, data_y_range).
+    pub fn resolve_view_ranges(&self) -> ([f32; 2], [f32; 2], [f32; 2], [f32; 2]) {
+        let (data_x, data_y) = self.compute_data_ranges();
 
-        let x_labels: Vec<String> = x_ticks.iter().map(|v| (self.options.x_axis.format)(*v)).collect();
-        let y_labels: Vec<String> = y_ticks.iter().map(|v| (self.options.y_axis.format)(*v)).collect();
+        let view_x = match self.view_state.x_range {
+            Some((lo, hi)) => [lo, hi],
+            None => data_x,
+        };
+        let view_y = match self.view_state.y_range {
+            Some((lo, hi)) => [lo, hi],
+            None => data_y,
+        };
+
+        (view_x, view_y, data_x, data_y)
+    }
+
+    /// Build the plotter widget. Consumes `self` (the Plotter is a builder).
+    pub fn draw(self) -> Element<'a, Message>
+    where
+        Message: Clone + 'a,
+    {
+        let (view_x, view_y, _, _) = self.resolve_view_ranges();
+
+        let x_ticks = crate::ticks::compute_ticks(view_x[0], view_x[1], &self.options.x_axis.ticks);
+        let y_ticks = crate::ticks::compute_ticks(view_y[0], view_y[1], &self.options.y_axis.ticks);
+
+        let x_labels: Vec<String> = x_ticks
+            .iter()
+            .map(|v| (self.options.x_axis.format)(*v))
+            .collect();
+        let y_labels: Vec<String> = y_ticks
+            .iter()
+            .map(|v| (self.options.y_axis.format)(*v))
+            .collect();
 
         let overlay = AxisOverlay {
             x_ticks,
             y_ticks,
             x_labels,
             y_labels,
-            x_range,
-            y_range,
+            x_range: view_x,
+            y_range: view_y,
             padding: self.options.padding,
             x_label_color: self.options.x_axis.label_color,
             y_label_color: self.options.y_axis.label_color,
