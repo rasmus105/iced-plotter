@@ -74,6 +74,15 @@ pub struct InteractionConfig {
     pub zoom_speed: f32,
     /// Enable double-click to reset view (fit all data).
     pub double_click_to_fit: bool,
+    /// Enable Ctrl+drag rectangle zoom selection.
+    pub zoom_select: bool,
+    /// Enable elastic over-scroll with spring-back animation.
+    pub elastic: bool,
+    /// How far past bounds you can over-scroll (fraction of view range, 0.0 - 1.0).
+    /// Higher = more stretchy. Default 0.3.
+    pub elastic_limit: f32,
+    /// Duration of the spring-back animation in milliseconds. Default 200.
+    pub elastic_duration_ms: u64,
 }
 
 impl Default for InteractionConfig {
@@ -88,6 +97,10 @@ impl Default for InteractionConfig {
             boundary_padding: 0.05,
             zoom_speed: 0.1,
             double_click_to_fit: true,
+            zoom_select: true,
+            elastic: true,
+            elastic_limit: 0.3,
+            elastic_duration_ms: 200,
         }
     }
 }
@@ -105,6 +118,10 @@ impl InteractionConfig {
             boundary_padding: 0.05,
             zoom_speed: 0.1,
             double_click_to_fit: false,
+            zoom_select: false,
+            elastic: false,
+            elastic_limit: 0.3,
+            elastic_duration_ms: 200,
         }
     }
 

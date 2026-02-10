@@ -50,12 +50,19 @@ impl InteractiveExample {
         };
 
         let info = column![
-            text("Interactive Plot Demo"),
+            text("Interactive Plot"),
             text(""),
             text("Controls:"),
             text("  Drag: Pan"),
             text("  Scroll: Zoom"),
+            text("  Ctrl+Drag: Zoom select"),
             text("  Double-click: Reset"),
+            text(""),
+            text("Features:"),
+            text("  - Elastic over-scroll"),
+            text("  - Rectangle zoom select"),
+            text("  - Boundary clamping"),
+            text("  - X bounds: [0, 20]"),
             text(""),
             text("Current View:"),
             text(x_info),
@@ -83,7 +90,22 @@ impl InteractiveExample {
             ],
             &self.view_state,
         )
-        .with_interaction(InteractionConfig::full())
+        .with_interaction(InteractionConfig {
+            pan_x: true,
+            pan_y: true,
+            zoom_x: true,
+            zoom_y: true,
+            // Set X bounds to demonstrate elastic over-scroll and clamping
+            x_bounds: Some((0.0, 20.0)),
+            y_bounds: Some((-1.5, 1.5)),
+            boundary_padding: 0.05,
+            zoom_speed: 0.1,
+            double_click_to_fit: true,
+            zoom_select: true,
+            elastic: true,
+            elastic_limit: 0.3,
+            elastic_duration_ms: 200,
+        })
         .on_view_change(Message::ViewChanged);
 
         row![

@@ -60,6 +60,12 @@ pub struct Pipeline {
     #[allow(dead_code)]
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
+    /// Scissor rect for the plot area (inside padding), in absolute physical pixels.
+    /// Set during `prepare`, used during `draw`. Format: [x, y, width, height].
+    pub plot_scissor: [u32; 4],
+    /// Scissor rect for the full widget bounds, in absolute physical pixels.
+    /// Used to restore after plot-area clipping. Format: [x, y, width, height].
+    pub widget_scissor: [u32; 4],
 }
 
 impl Pipeline {
@@ -264,6 +270,8 @@ impl Pipeline {
             uniform_buffer,
             bind_group_layout,
             bind_group,
+            plot_scissor: [0, 0, 1, 1],
+            widget_scissor: [0, 0, 1, 1],
         }
     }
 
