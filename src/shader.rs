@@ -813,8 +813,27 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             return None;
         }
 
-        let (view_x, view_y, _data_x, _data_y) = self.resolve_view_ranges();
+        let (view_x, view_y, data_x, data_y) = self.resolve_view_ranges();
         let padding = self.options.padding;
+
+        // When elastic is enabled but no explicit bounds are set, use the data
+        // extent as automatic bounds. Without bounds the elastic/clamping logic
+        // has nothing to enforce, which silently disables the feature — a
+        // confusing API pitfall.
+        let effective_x_bounds = interaction.x_bounds.or_else(|| {
+            if interaction.elastic && interaction.pan_x {
+                Some((data_x[0], data_x[1]))
+            } else {
+                None
+            }
+        });
+        let effective_y_bounds = interaction.y_bounds.or_else(|| {
+            if interaction.elastic && interaction.pan_y {
+                Some((data_y[0], data_y[1]))
+            } else {
+                None
+            }
+        });
 
         // ---------- Elastic spring-back animation ----------
         // Tick the animation on every event while it's active.
@@ -940,13 +959,13 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                             let x_out = interaction.pan_x
                                 && is_out_of_bounds(
                                     current_x,
-                                    interaction.x_bounds,
+                                    effective_x_bounds,
                                     interaction.boundary_padding,
                                 );
                             let y_out = interaction.pan_y
                                 && is_out_of_bounds(
                                     current_y,
-                                    interaction.y_bounds,
+                                    effective_y_bounds,
                                     interaction.boundary_padding,
                                 );
 
@@ -954,7 +973,7 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                                 let target_x = if x_out {
                                     Some(clamp_range_to_bounds(
                                         current_x,
-                                        interaction.x_bounds,
+                                        effective_x_bounds,
                                         interaction.boundary_padding,
                                     ))
                                 } else {
@@ -963,7 +982,7 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                                 let target_y = if y_out {
                                     Some(clamp_range_to_bounds(
                                         current_y,
-                                        interaction.y_bounds,
+                                        effective_y_bounds,
                                         interaction.boundary_padding,
                                     ))
                                 } else {
@@ -1080,14 +1099,14 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                                 let new_x = if interaction.elastic {
                                     apply_elastic_resistance(
                                         raw,
-                                        interaction.x_bounds,
+                                        effective_x_bounds,
                                         interaction.boundary_padding,
                                         interaction.elastic_limit,
                                     )
                                 } else {
                                     clamp_range_to_bounds(
                                         raw,
-                                        interaction.x_bounds,
+                                        effective_x_bounds,
                                         interaction.boundary_padding,
                                     )
                                 };
@@ -1099,14 +1118,14 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                                 let new_y = if interaction.elastic {
                                     apply_elastic_resistance(
                                         raw,
-                                        interaction.y_bounds,
+                                        effective_y_bounds,
                                         interaction.boundary_padding,
                                         interaction.elastic_limit,
                                     )
                                 } else {
                                     clamp_range_to_bounds(
                                         raw,
-                                        interaction.y_bounds,
+                                        effective_y_bounds,
                                         interaction.boundary_padding,
                                     )
                                 };
@@ -1168,7 +1187,7 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                     let new_hi = cx + (view_x[1] - cx) * factor;
                     let clamped = clamp_range_to_bounds(
                         (new_lo, new_hi),
-                        interaction.x_bounds,
+                        effective_x_bounds,
                         interaction.boundary_padding,
                     );
                     new_view.x_range = Some(clamped);
@@ -1179,7 +1198,7 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                     let new_hi = cy + (view_y[1] - cy) * factor;
                     let clamped = clamp_range_to_bounds(
                         (new_lo, new_hi),
-                        interaction.y_bounds,
+                        effective_y_bounds,
                         interaction.boundary_padding,
                     );
                     new_view.y_range = Some(clamped);
