@@ -1,7 +1,8 @@
 use iced::widget::{column, row, text, Container};
 use iced::{Color, Element, Length, Theme};
 use iced_plotter::plotter::{
-    ColorMode, InteractionConfig, PlotPoints, PlotSeries, Plotter, SeriesStyle, ViewState,
+    AxisConfig, ColorMode, InteractionConfig, LegendConfig, LegendState, PlotPoints, PlotSeries,
+    Plotter, PlotterOptions, SeriesStyle, ViewState,
 };
 
 pub fn main() {
@@ -22,12 +23,14 @@ enum Message {
 
 struct InteractiveExample {
     view_state: ViewState,
+    legend_state: LegendState,
 }
 
 impl InteractiveExample {
     pub fn default() -> Self {
         Self {
             view_state: ViewState::auto_fit(),
+            legend_state: LegendState::default(),
         }
     }
 
@@ -90,6 +93,13 @@ impl InteractiveExample {
             ],
             &self.view_state,
         )
+        .with_options(PlotterOptions {
+            legend: Some(LegendConfig::default()),
+            x_axis: AxisConfig::default().with_title("X Axis"),
+            y_axis: AxisConfig::default().with_title("Amplitude"),
+            ..PlotterOptions::default()
+        })
+        .with_legend_state(self.legend_state.clone())
         .with_interaction(InteractionConfig {
             pan_x: true,
             pan_y: true,

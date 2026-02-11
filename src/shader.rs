@@ -112,6 +112,7 @@ impl PlotterPrimitive {
         view_x_range: [f32; 2],
         view_y_range: [f32; 2],
         selection_rect: Option<(Point, Point)>,
+        hidden_series: &std::collections::HashSet<usize>,
     ) -> Self {
         let config = RenderConfig {
             show_markers: true,
@@ -126,7 +127,12 @@ impl PlotterPrimitive {
         let mut data_y_min = f32::INFINITY;
         let mut data_y_max = f32::NEG_INFINITY;
 
-        for s in series {
+        for (idx, s) in series.iter().enumerate() {
+            // Skip hidden series
+            if hidden_series.contains(&idx) {
+                continue;
+            }
+
             series_boundaries.push(all_points_with_colors.len());
             match &s.points {
                 PlotPoints::Owned(points) => {
@@ -885,6 +891,28 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             // ---- Mouse button press ----
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
+                    // Check legend interactions first — block all clicks within legend bounds
+                    if self.options.legend.is_some() {
+                        let layout = self.legend_state.layout.borrow();
+                        // Check toggle button clicks
+                        for toggle in layout.toggles.iter() {
+                            if toggle.rect.contains(pos) {
+                                let mut hidden = self.legend_state.hidden_series.borrow_mut();
+                                if hidden.contains(&toggle.series_index) {
+                                    hidden.remove(&toggle.series_index);
+                                } else {
+                                    hidden.insert(toggle.series_index);
+                                }
+                                return Some(shader::Action::request_redraw().and_capture());
+                            }
+                        }
+                        // Block clicks anywhere on the legend background
+                        if let Some(legend_bounds) = layout.bounds {
+                            if legend_bounds.contains(pos) {
+                                return Some(shader::Action::capture());
+                            }
+                        }
+                    }
                     // Double-click detection
                     if interaction.double_click_to_fit {
                         let now = std::time::Instant::now();
@@ -1161,6 +1189,16 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                 // Only zoom if cursor is within bounds
                 let cursor_pos = cursor.position_in(bounds)?;
 
+                // Block scroll over legend
+                if self.options.legend.is_some() {
+                    let layout = self.legend_state.layout.borrow();
+                    if let Some(legend_bounds) = layout.bounds {
+                        if legend_bounds.contains(cursor_pos) {
+                            return Some(shader::Action::capture());
+                        }
+                    }
+                }
+
                 let scroll_y = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => *y,
                     mouse::ScrollDelta::Pixels { y, .. } => *y / 50.0,
@@ -1237,6 +1275,7 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             None
         };
 
+        let hidden = self.legend_state.hidden_series.borrow();
         PlotterPrimitive::new(
             &self.series,
             bounds,
@@ -1244,6 +1283,7 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             view_x,
             view_y,
             selection_rect,
+            &hidden,
         )
     }
 
@@ -1267,7 +1307,23 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             InteractionMode::Panning => mouse::Interaction::Grabbing,
             InteractionMode::ZoomSelecting => mouse::Interaction::Crosshair,
             InteractionMode::Idle => {
-                if cursor.is_over(bounds) {
+                if let Some(pos) = cursor.position_in(bounds) {
+                    // Check if cursor is over the legend area
+                    if self.options.legend.is_some() {
+                        let layout = self.legend_state.layout.borrow();
+                        // Check toggle buttons first — show pointer
+                        for toggle in layout.toggles.iter() {
+                            if toggle.rect.contains(pos) {
+                                return mouse::Interaction::Pointer;
+                            }
+                        }
+                        // Over legend background — show default cursor (no drag)
+                        if let Some(legend_bounds) = layout.bounds {
+                            if legend_bounds.contains(pos) {
+                                return mouse::Interaction::default();
+                            }
+                        }
+                    }
                     // Show crosshair when Ctrl is held (indicating zoom select is available)
                     if self.interaction.zoom_select && state.modifiers.control() {
                         mouse::Interaction::Crosshair

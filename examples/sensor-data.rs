@@ -2,8 +2,8 @@ use iced::time::{self, Duration};
 use iced::widget::{column, row, text, Container};
 use iced::{Color, Element, Length, Subscription, Theme};
 use iced_plotter::plotter::{
-    ColorMode, InteractionConfig, PlotPoint, PlotPoints, PlotSeries, Plotter, SeriesStyle,
-    ViewState,
+    AxisConfig, ColorMode, InteractionConfig, LegendConfig, LegendPosition, LegendState, PlotPoint,
+    PlotPoints, PlotSeries, Plotter, PlotterOptions, SeriesStyle, ViewState,
 };
 
 pub fn main() {
@@ -50,6 +50,7 @@ struct SensorData {
     current_humidity: f32,
     rng: SimpleRng,
     view_state: ViewState,
+    legend_state: LegendState,
 }
 
 impl SensorData {
@@ -62,6 +63,7 @@ impl SensorData {
             current_humidity: 55.0,
             rng: SimpleRng::new(42),
             view_state: ViewState::auto_fit(),
+            legend_state: LegendState::default(),
         }
     }
 
@@ -127,16 +129,25 @@ impl SensorData {
 
         let plotter = Plotter::new(
             vec![
-                PlotSeries::new("Temperature (°C)", PlotPoints::borrowed(&self.temperature))
-                    .with_style(SeriesStyle::new(ColorMode::solid(Color::from_rgb(
-                        0.9, 0.3, 0.2,
-                    )))),
-                PlotSeries::new("Humidity (%)", PlotPoints::borrowed(&self.humidity)).with_style(
+                PlotSeries::new("Temperature", PlotPoints::borrowed(&self.temperature)).with_style(
+                    SeriesStyle::new(ColorMode::solid(Color::from_rgb(0.9, 0.3, 0.2))),
+                ),
+                PlotSeries::new("Humidity", PlotPoints::borrowed(&self.humidity)).with_style(
                     SeriesStyle::new(ColorMode::solid(Color::from_rgb(0.2, 0.6, 0.9))),
                 ),
             ],
             &self.view_state,
         )
+        .with_options(PlotterOptions {
+            legend: Some(LegendConfig {
+                position: LegendPosition::TopLeft,
+                ..LegendConfig::default()
+            }),
+            x_axis: AxisConfig::default().with_title("Time (s)"),
+            y_axis: AxisConfig::default().with_title("Value"),
+            ..PlotterOptions::default()
+        })
+        .with_legend_state(self.legend_state.clone())
         .with_interaction(InteractionConfig::pan_x_autofit_y())
         .on_view_change(Message::ViewChanged);
 

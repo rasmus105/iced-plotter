@@ -1,9 +1,27 @@
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::rc::Rc;
 
 use iced::widget::canvas;
 use iced::widget::shader;
 use iced::widget::stack;
 use iced::{Element, Font, Length, Point, Renderer, Theme};
+
+/// Shared state for the legend, including visibility toggles and layout info.
+///
+/// Store this in your application state and pass it to [`Plotter::with_legend_state`]
+/// to persist legend toggle state and enable proper hit testing across frames.
+///
+/// Create with `LegendState::default()`.
+#[derive(Clone, Debug, Default)]
+pub struct LegendState {
+    pub hidden_series: Rc<RefCell<HashSet<usize>>>,
+    pub layout: Rc<RefCell<LegendLayout>>,
+}
+
+/// For backwards compatibility — alias for the hidden series set.
+pub type HiddenSeries = Rc<RefCell<HashSet<usize>>>;
 
 // ================================================================================
 // Interaction Types
@@ -326,6 +344,33 @@ impl<'a> ColorMode<'a> {
             values: Some(values.into()),
         }
     }
+
+    /// Get a single representative color for this color mode (used in legends).
+    pub fn representative_color(&self) -> iced::Color {
+        match self {
+            ColorMode::Solid(c) => *c,
+            ColorMode::ValueGradient { low, high, .. } => {
+                // Midpoint blend
+                iced::Color::from_rgb(
+                    (low.r + high.r) / 2.0,
+                    (low.g + high.g) / 2.0,
+                    (low.b + high.b) / 2.0,
+                )
+            }
+            ColorMode::IndexGradient { start, end } => {
+                // Midpoint blend
+                iced::Color::from_rgb(
+                    (start.r + end.r) / 2.0,
+                    (start.g + end.g) / 2.0,
+                    (start.b + end.b) / 2.0,
+                )
+            }
+            ColorMode::Colormap { name, .. } => {
+                // Sample at midpoint
+                name.sample(0.5)
+            }
+        }
+    }
 }
 
 // ================================================================================
@@ -397,6 +442,17 @@ impl Default for PlotPoints<'_> {
     }
 }
 
+impl PlotPoints<'_> {
+    /// Get the last Y value in the series (for legend display).
+    pub fn last_y(&self) -> Option<f32> {
+        match self {
+            PlotPoints::Owned(pts) => pts.last().map(|p| p.y),
+            PlotPoints::Borrowed(pts) => pts.last().map(|p| p.y),
+            PlotPoints::Generator(_) => None, // generators don't have a "latest" point
+        }
+    }
+}
+
 pub struct PlotSeries<'a> {
     pub label: String,
     pub style: SeriesStyle<'a>,
@@ -414,6 +470,97 @@ impl<'a> PlotSeries<'a> {
 
     pub fn with_style(mut self, style: SeriesStyle<'a>) -> Self {
         self.style = style;
+        self
+    }
+}
+
+// ================================================================================
+// Legend Types
+// ================================================================================
+
+/// Position of the legend within the plot area.
+#[derive(Clone, Debug, Copy, Default, PartialEq, Eq)]
+pub enum LegendPosition {
+    #[default]
+    TopRight,
+    TopLeft,
+    BottomRight,
+    BottomLeft,
+}
+
+/// Configuration for the plot legend.
+pub struct LegendConfig {
+    /// Position of the legend within the plot area.
+    pub position: LegendPosition,
+    /// Color of the label text.
+    pub text_color: iced::Color,
+    /// Font size for legend labels.
+    pub text_size: f32,
+    /// Background color of the legend box.
+    pub background_color: iced::Color,
+    /// Internal padding within the legend box.
+    pub padding: f32,
+    /// Distance from the plot edge.
+    pub margin: f32,
+    /// Size of the color toggle square.
+    pub toggle_size: f32,
+    /// Whether to show the latest value next to the label.
+    pub show_value: bool,
+    /// Format function for the latest value.
+    pub value_format: Box<dyn Fn(f32) -> String>,
+}
+
+impl Default for LegendConfig {
+    fn default() -> Self {
+        Self {
+            position: LegendPosition::default(),
+            text_color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.7),
+            text_size: 12.0,
+            background_color: iced::Color::from_rgba(0.1, 0.1, 0.1, 0.8),
+            padding: 8.0,
+            margin: 10.0,
+            toggle_size: 12.0,
+            show_value: true,
+            value_format: Box::new(|v| format!("{v:.2}")),
+        }
+    }
+}
+
+impl Clone for LegendConfig {
+    fn clone(&self) -> Self {
+        Self {
+            position: self.position,
+            text_color: self.text_color,
+            text_size: self.text_size,
+            background_color: self.background_color,
+            padding: self.padding,
+            margin: self.margin,
+            toggle_size: self.toggle_size,
+            show_value: self.show_value,
+            value_format: Box::new(|v| format!("{v:.2}")),
+        }
+    }
+}
+
+impl std::fmt::Debug for LegendConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LegendConfig")
+            .field("position", &self.position)
+            .field("text_color", &self.text_color)
+            .field("text_size", &self.text_size)
+            .field("background_color", &self.background_color)
+            .field("padding", &self.padding)
+            .field("margin", &self.margin)
+            .field("toggle_size", &self.toggle_size)
+            .field("show_value", &self.show_value)
+            .finish()
+    }
+}
+
+impl LegendConfig {
+    /// Set the value format function.
+    pub fn with_value_format(mut self, f: impl Fn(f32) -> String + 'static) -> Self {
+        self.value_format = Box::new(f);
         self
     }
 }
@@ -447,6 +594,12 @@ pub struct AxisConfig {
     pub label_size: f32,
     pub ticks: crate::ticks::TickConfig,
     pub format: Box<dyn Fn(f32) -> String>,
+    /// Optional axis title (e.g. "Time (s)", "Temperature (°C)").
+    pub title: Option<String>,
+    /// Color for the axis title text.
+    pub title_color: iced::Color,
+    /// Font size for the axis title.
+    pub title_size: f32,
 }
 
 impl Clone for AxisConfig {
@@ -459,6 +612,9 @@ impl Clone for AxisConfig {
             label_size: self.label_size,
             ticks: self.ticks.clone(),
             format: Box::new(|v| format!("{v:.2}")),
+            title: self.title.clone(),
+            title_color: self.title_color,
+            title_size: self.title_size,
         }
     }
 }
@@ -486,6 +642,9 @@ impl Default for AxisConfig {
             label_size: 12.0,
             ticks: crate::ticks::TickConfig::default(),
             format: Box::new(|v| format!("{v:.2}")),
+            title: None,
+            title_color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.7),
+            title_size: 14.0,
         }
     }
 }
@@ -495,11 +654,30 @@ impl AxisConfig {
         self.format = Box::new(f);
         self
     }
+
+    /// Set the axis title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the axis title color.
+    pub fn with_title_color(mut self, color: iced::Color) -> Self {
+        self.title_color = color;
+        self
+    }
+
+    /// Set the axis title font size.
+    pub fn with_title_size(mut self, size: f32) -> Self {
+        self.title_size = size;
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct PlotterOptions {
-    pub show_legend: bool,
+    /// Legend configuration. `None` = no legend, `Some(config)` = show legend.
+    pub legend: Option<LegendConfig>,
     pub padding: f32,
     pub grid: GridStyle,
     pub x_axis: AxisConfig,
@@ -509,7 +687,7 @@ pub struct PlotterOptions {
 impl Default for PlotterOptions {
     fn default() -> Self {
         Self {
-            show_legend: false,
+            legend: None,
             padding: 50.0,
             grid: GridStyle::default(),
             x_axis: AxisConfig::default(),
@@ -531,6 +709,9 @@ pub struct Plotter<'a, Message> {
 
     // callback: maps a new ViewState to the user's Message type
     pub(crate) on_view_change: Option<Box<dyn Fn(ViewState) -> Message + 'a>>,
+
+    // shared legend state (visibility toggles + layout for hit testing)
+    pub(crate) legend_state: LegendState,
 }
 
 // ================================================================================
@@ -545,7 +726,26 @@ impl<'a, Message> Plotter<'a, Message> {
             view_state,
             interaction: InteractionConfig::default(),
             on_view_change: None,
+            legend_state: LegendState::default(),
         }
+    }
+
+    /// Set the shared legend state.
+    ///
+    /// This allows you to persist legend toggle state and hit-test layout across frames.
+    /// Create with `LegendState::default()` and store in your app state.
+    pub fn with_legend_state(mut self, state: LegendState) -> Self {
+        self.legend_state = state;
+        self
+    }
+
+    /// Set the shared hidden series state (convenience method).
+    ///
+    /// This allows you to persist legend toggle state across frames.
+    /// Create with `Rc::new(RefCell::new(HashSet::new()))` and store in your app state.
+    pub fn with_hidden_series(mut self, hidden: HiddenSeries) -> Self {
+        self.legend_state.hidden_series = hidden;
+        self
     }
 
     pub fn with_options(mut self, options: PlotterOptions) -> Self {
@@ -565,14 +765,18 @@ impl<'a, Message> Plotter<'a, Message> {
         self
     }
 
-    /// Compute the bounding box of all data points.
+    /// Compute the bounding box of all visible (non-hidden) data points.
     pub fn compute_data_ranges(&self) -> ([f32; 2], [f32; 2]) {
         let mut x_min = f32::INFINITY;
         let mut x_max = f32::NEG_INFINITY;
         let mut y_min = f32::INFINITY;
         let mut y_max = f32::NEG_INFINITY;
 
-        for s in &self.series {
+        let hidden = self.legend_state.hidden_series.borrow();
+        for (idx, s) in self.series.iter().enumerate() {
+            if hidden.contains(&idx) {
+                continue;
+            }
             let iter: Box<dyn Iterator<Item = (f32, f32)> + '_> = match &s.points {
                 PlotPoints::Owned(pts) => Box::new(pts.iter().map(|p| (p.x, p.y))),
                 PlotPoints::Borrowed(pts) => Box::new(pts.iter().map(|p| (p.x, p.y))),
@@ -645,6 +849,20 @@ impl<'a, Message> Plotter<'a, Message> {
             .map(|v| (self.options.y_axis.format)(*v))
             .collect();
 
+        // Build legend entries if legend is enabled
+        let legend_entries: Vec<LegendEntry> = if self.options.legend.is_some() {
+            self.series
+                .iter()
+                .map(|s| LegendEntry {
+                    label: s.label.clone(),
+                    color: s.style.color.representative_color(),
+                    latest_value: s.points.last_y(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let overlay = AxisOverlay {
             x_ticks,
             y_ticks,
@@ -659,6 +877,18 @@ impl<'a, Message> Plotter<'a, Message> {
             y_label_size: self.options.y_axis.label_size,
             show_x: self.options.x_axis.show,
             show_y: self.options.y_axis.show,
+            // Axis titles
+            x_title: self.options.x_axis.title.clone(),
+            x_title_color: self.options.x_axis.title_color,
+            x_title_size: self.options.x_axis.title_size,
+            y_title: self.options.y_axis.title.clone(),
+            y_title_color: self.options.y_axis.title_color,
+            y_title_size: self.options.y_axis.title_size,
+            // Legend
+            legend_config: self.options.legend.clone(),
+            legend_entries,
+            hidden_series: self.legend_state.hidden_series.clone(),
+            legend_layout: self.legend_state.layout.clone(),
         };
 
         stack![
@@ -669,6 +899,34 @@ impl<'a, Message> Plotter<'a, Message> {
         .height(Length::Fill)
         .into()
     }
+}
+
+/// Computed rectangle for a legend toggle button (for hit testing).
+#[derive(Clone, Debug)]
+pub struct LegendToggleRect {
+    pub series_index: usize,
+    /// Rectangle in widget-local coordinates.
+    pub rect: iced::Rectangle,
+}
+
+/// Precomputed legend layout for hit testing from the shader.
+#[derive(Clone, Debug, Default)]
+pub struct LegendLayout {
+    /// Bounding box of the entire legend (for blocking interactions).
+    pub bounds: Option<iced::Rectangle>,
+    /// Individual toggle button rects.
+    pub toggles: Vec<LegendToggleRect>,
+}
+
+/// Shared legend layout info for hit testing from the shader.
+pub type LegendLayoutInfo = Rc<RefCell<LegendLayout>>;
+
+/// Data for a single legend entry.
+#[derive(Clone, Debug)]
+struct LegendEntry {
+    label: String,
+    color: iced::Color,
+    latest_value: Option<f32>,
 }
 
 struct AxisOverlay {
@@ -685,6 +943,18 @@ struct AxisOverlay {
     y_label_size: f32,
     show_x: bool,
     show_y: bool,
+    // Axis titles
+    x_title: Option<String>,
+    x_title_color: iced::Color,
+    x_title_size: f32,
+    y_title: Option<String>,
+    y_title_color: iced::Color,
+    y_title_size: f32,
+    // Legend
+    legend_config: Option<LegendConfig>,
+    legend_entries: Vec<LegendEntry>,
+    hidden_series: HiddenSeries,
+    legend_layout: LegendLayoutInfo,
 }
 
 impl<Message> canvas::Program<Message> for AxisOverlay {
@@ -705,6 +975,7 @@ impl<Message> canvas::Program<Message> for AxisOverlay {
         let x_span = self.x_range[1] - self.x_range[0];
         let y_span = self.y_range[1] - self.y_range[0];
 
+        // ---- X tick labels ----
         if self.show_x && x_span.abs() > f32::EPSILON {
             for (tick, label) in self.x_ticks.iter().zip(&self.x_labels) {
                 if *tick < self.x_range[0] || *tick > self.x_range[1] {
@@ -727,6 +998,7 @@ impl<Message> canvas::Program<Message> for AxisOverlay {
             }
         }
 
+        // ---- Y tick labels ----
         if self.show_y && y_span.abs() > f32::EPSILON {
             for (tick, label) in self.y_ticks.iter().zip(&self.y_labels) {
                 if *tick < self.y_range[0] || *tick > self.y_range[1] {
@@ -747,6 +1019,222 @@ impl<Message> canvas::Program<Message> for AxisOverlay {
                     ..canvas::Text::default()
                 });
             }
+        }
+
+        // ---- X axis title ----
+        if let Some(ref title) = self.x_title {
+            let center_x = self.padding + plot_width / 2.0;
+            // Place below tick labels: padding + plot_height + tick_label_space
+            let y = self.padding + plot_height + 6.0 + self.x_label_size + 8.0;
+            frame.fill_text(canvas::Text {
+                content: title.clone(),
+                size: iced::Pixels(self.x_title_size),
+                position: Point::new(center_x, y),
+                color: self.x_title_color,
+                align_x: iced::alignment::Horizontal::Center.into(),
+                align_y: iced::alignment::Vertical::Top,
+                font: Font::DEFAULT,
+                ..canvas::Text::default()
+            });
+        }
+
+        // ---- Y axis title (rotated 90° counter-clockwise) ----
+        if let Some(ref title) = self.y_title {
+            let center_y = self.padding + plot_height / 2.0;
+            // Place to the left of tick labels
+            let x = 4.0;
+            frame.with_save(|frame| {
+                // Move to the desired position, rotate, then draw centered at origin
+                frame.translate(iced::Vector::new(x, center_y));
+                frame.rotate(-std::f32::consts::FRAC_PI_2);
+                frame.fill_text(canvas::Text {
+                    content: title.clone(),
+                    size: iced::Pixels(self.y_title_size),
+                    position: Point::new(0.0, 0.0),
+                    color: self.y_title_color,
+                    align_x: iced::alignment::Horizontal::Center.into(),
+                    align_y: iced::alignment::Vertical::Top,
+                    font: Font::DEFAULT,
+                    ..canvas::Text::default()
+                });
+            });
+        }
+
+        // ---- Legend ----
+        if let Some(ref config) = self.legend_config {
+            let hidden = self.hidden_series.borrow();
+            let mut toggle_rects: Vec<LegendToggleRect> = Vec::new();
+            let mut legend_bg_rect: Option<iced::Rectangle> = None;
+
+            let row_height = config.toggle_size.max(config.text_size) + 4.0;
+            let num_entries = self.legend_entries.len();
+            if num_entries > 0 {
+                // Estimate legend box dimensions
+                // Each row: [toggle_square] [gap] [label] [gap] [value]
+                let gap = 6.0;
+                let value_format = &config.value_format;
+                let mut max_text_width: f32 = 0.0;
+                for entry in &self.legend_entries {
+                    // Rough character width estimate: text_size * 0.6 per char (monospace)
+                    let char_width = config.text_size * 0.6;
+                    let label_width = entry.label.len() as f32 * char_width;
+                    let value_width = if config.show_value {
+                        if let Some(v) = entry.latest_value {
+                            let formatted = (value_format)(v);
+                            (formatted.len() as f32 + 1.0) * char_width // +1 for space
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+                    max_text_width = max_text_width.max(label_width + value_width);
+                }
+
+                let legend_width = config.padding * 2.0 + config.toggle_size + gap + max_text_width;
+                let legend_height = config.padding * 2.0 + num_entries as f32 * row_height - 4.0;
+
+                // Position based on legend position
+                let (legend_x, legend_y) = match config.position {
+                    LegendPosition::TopRight => (
+                        self.padding + plot_width - config.margin - legend_width,
+                        self.padding + config.margin,
+                    ),
+                    LegendPosition::TopLeft => {
+                        (self.padding + config.margin, self.padding + config.margin)
+                    }
+                    LegendPosition::BottomRight => (
+                        self.padding + plot_width - config.margin - legend_width,
+                        self.padding + plot_height - config.margin - legend_height,
+                    ),
+                    LegendPosition::BottomLeft => (
+                        self.padding + config.margin,
+                        self.padding + plot_height - config.margin - legend_height,
+                    ),
+                };
+
+                // Draw background
+                let bg_rect = iced::Rectangle::new(
+                    Point::new(legend_x, legend_y),
+                    iced::Size::new(legend_width, legend_height),
+                );
+                legend_bg_rect = Some(bg_rect);
+                frame.fill_rectangle(bg_rect.position(), bg_rect.size(), config.background_color);
+
+                // Draw border
+                frame.stroke_rectangle(
+                    bg_rect.position(),
+                    bg_rect.size(),
+                    canvas::Stroke::default()
+                        .with_color(iced::Color::from_rgba(1.0, 1.0, 1.0, 0.2))
+                        .with_width(1.0),
+                );
+
+                // Draw entries
+                for (i, entry) in self.legend_entries.iter().enumerate() {
+                    let is_hidden = hidden.contains(&i);
+                    let entry_y = legend_y + config.padding + i as f32 * row_height;
+
+                    // Toggle square (rounded rect)
+                    let toggle_x = legend_x + config.padding;
+                    let toggle_y = entry_y + (row_height - 4.0 - config.toggle_size) / 2.0;
+                    let toggle_rect = iced::Rectangle::new(
+                        Point::new(toggle_x, toggle_y),
+                        iced::Size::new(config.toggle_size, config.toggle_size),
+                    );
+
+                    // Store for hit testing
+                    toggle_rects.push(LegendToggleRect {
+                        series_index: i,
+                        rect: toggle_rect,
+                    });
+
+                    let toggle_color = if is_hidden {
+                        // Dimmed version of the color
+                        iced::Color::from_rgba(
+                            entry.color.r * 0.3,
+                            entry.color.g * 0.3,
+                            entry.color.b * 0.3,
+                            0.5,
+                        )
+                    } else {
+                        entry.color
+                    };
+
+                    // Draw rounded rectangle for toggle
+                    let corner_radius: f32 = 3.0;
+                    let rounded_path = canvas::path::Builder::new();
+                    let mut builder = rounded_path;
+                    // Build a rounded rect path
+                    let rx = toggle_x;
+                    let ry = toggle_y;
+                    let rw = config.toggle_size;
+                    let rh = config.toggle_size;
+                    let r = corner_radius.min(rw / 2.0).min(rh / 2.0);
+                    builder.move_to(Point::new(rx + r, ry));
+                    builder.line_to(Point::new(rx + rw - r, ry));
+                    builder.arc_to(Point::new(rx + rw, ry), Point::new(rx + rw, ry + r), r);
+                    builder.line_to(Point::new(rx + rw, ry + rh - r));
+                    builder.arc_to(
+                        Point::new(rx + rw, ry + rh),
+                        Point::new(rx + rw - r, ry + rh),
+                        r,
+                    );
+                    builder.line_to(Point::new(rx + r, ry + rh));
+                    builder.arc_to(Point::new(rx, ry + rh), Point::new(rx, ry + rh - r), r);
+                    builder.line_to(Point::new(rx, ry + r));
+                    builder.arc_to(Point::new(rx, ry), Point::new(rx + r, ry), r);
+                    builder.close();
+                    let path = builder.build();
+                    frame.fill(&path, toggle_color);
+
+                    // Draw border on toggle
+                    frame.stroke(
+                        &path,
+                        canvas::Stroke::default()
+                            .with_color(iced::Color::from_rgba(1.0, 1.0, 1.0, 0.3))
+                            .with_width(1.0),
+                    );
+
+                    // Label text
+                    let text_x = toggle_x + config.toggle_size + gap;
+                    let text_y = entry_y + (row_height - 4.0) / 2.0;
+                    let text_color = if is_hidden {
+                        iced::Color::from_rgba(
+                            config.text_color.r,
+                            config.text_color.g,
+                            config.text_color.b,
+                            config.text_color.a * 0.4,
+                        )
+                    } else {
+                        config.text_color
+                    };
+
+                    let mut display_text = entry.label.clone();
+                    if config.show_value
+                        && let Some(v) = entry.latest_value
+                    {
+                        display_text.push_str(&format!(" {}", (value_format)(v)));
+                    }
+
+                    frame.fill_text(canvas::Text {
+                        content: display_text,
+                        size: iced::Pixels(config.text_size),
+                        position: Point::new(text_x, text_y),
+                        color: text_color,
+                        align_x: iced::alignment::Horizontal::Left.into(),
+                        align_y: iced::alignment::Vertical::Center,
+                        font: Font::MONOSPACE,
+                        ..canvas::Text::default()
+                    });
+                }
+            }
+
+            // Update shared legend layout for hit testing
+            *self.legend_layout.borrow_mut() = LegendLayout {
+                bounds: legend_bg_rect,
+                toggles: toggle_rects,
+            };
         }
 
         vec![frame.into_geometry()]
