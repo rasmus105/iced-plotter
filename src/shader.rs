@@ -2,7 +2,9 @@
 
 use crate::gpu_types::{RawPoint, Uniforms};
 use crate::pipeline::Pipeline;
-use crate::plotter::{ColorMode, PlotPoints, PlotSeries, Plotter, PlotterOptions, ViewState};
+use crate::plotter::{
+    ColorMode, HoveredPoint, PlotPoints, PlotSeries, Plotter, PlotterOptions, ViewState,
+};
 use crate::ticks::compute_ticks;
 
 use iced::keyboard;
@@ -93,6 +95,8 @@ pub struct PlotterPrimitive {
     grid_vertices: Vec<RawPoint>,
     /// Selection rectangle overlay vertices (if zoom-selecting)
     selection_vertices: Vec<RawPoint>,
+    /// Highlight ring vertices (for tooltip hover indicator)
+    highlight_vertices: Vec<RawPoint>,
     /// Series boundaries to prevent line connections between series
     #[allow(dead_code)]
     series_boundaries: Vec<usize>,
@@ -113,6 +117,7 @@ impl PlotterPrimitive {
         view_y_range: [f32; 2],
         selection_rect: Option<(Point, Point)>,
         hidden_series: &std::collections::HashSet<usize>,
+        highlight: Option<(Point, [f32; 4], f32, f32)>, // (screen_pos, color, radius, width)
     ) -> Self {
         let config = RenderConfig {
             show_markers: true,
@@ -215,6 +220,12 @@ impl PlotterPrimitive {
         let y_ticks = compute_ticks(view_y_range[0], view_y_range[1], &options.y_axis.ticks);
         let tick_info = TickInfo { x_ticks, y_ticks };
 
+        let highlight_vertices = if let Some((screen_pos, color, radius, width)) = highlight {
+            Self::generate_highlight_ring(screen_pos, color, radius, width)
+        } else {
+            Vec::new()
+        };
+
         Self {
             points: all_points,
             line_vertices,
@@ -222,6 +233,7 @@ impl PlotterPrimitive {
             config,
             grid_vertices,
             selection_vertices,
+            highlight_vertices,
             series_boundaries,
             tick_info,
         }
@@ -279,6 +291,52 @@ impl PlotterPrimitive {
         push_border_line(&mut vertices, x0, y1, x1, y1);
         push_border_line(&mut vertices, x0, y0, x0, y1);
         push_border_line(&mut vertices, x1, y0, x1, y1);
+
+        vertices
+    }
+
+    /// Generate a highlight ring as screen-space line quads forming a circle.
+    fn generate_highlight_ring(
+        center: Point,
+        color: [f32; 4],
+        radius: f32,
+        width: f32,
+    ) -> Vec<RawPoint> {
+        let segments = 32;
+        let mut vertices = Vec::with_capacity(segments * 6);
+        let half_width = width / 2.0;
+
+        for i in 0..segments {
+            let angle0 = (i as f32 / segments as f32) * std::f32::consts::TAU;
+            let angle1 = ((i + 1) as f32 / segments as f32) * std::f32::consts::TAU;
+
+            let ax = center.x + radius * angle0.cos();
+            let ay = center.y + radius * angle0.sin();
+            let bx = center.x + radius * angle1.cos();
+            let by = center.y + radius * angle1.sin();
+
+            // Build a quad for this line segment
+            let dx = bx - ax;
+            let dy = by - ay;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 0.001 {
+                continue;
+            }
+            let nx = -dy / len * half_width;
+            let ny = dx / len * half_width;
+
+            let v0 = RawPoint::new(ax + nx, ay + ny, color);
+            let v1 = RawPoint::new(ax - nx, ay - ny, color);
+            let v2 = RawPoint::new(bx + nx, by + ny, color);
+            let v3 = RawPoint::new(bx - nx, by - ny, color);
+
+            vertices.push(v0);
+            vertices.push(v1);
+            vertices.push(v2);
+            vertices.push(v1);
+            vertices.push(v3);
+            vertices.push(v2);
+        }
 
         vertices
     }
@@ -595,6 +653,25 @@ fn screen_to_data(
     (x, y)
 }
 
+/// Convert data coordinates to screen coordinates (relative to widget bounds).
+fn data_to_screen(
+    data_x: f32,
+    data_y: f32,
+    bounds: Rectangle,
+    view_x: [f32; 2],
+    view_y: [f32; 2],
+    padding: f32,
+) -> Point {
+    let plot_width = bounds.width - 2.0 * padding;
+    let plot_height = bounds.height - 2.0 * padding;
+    let x_norm = (data_x - view_x[0]) / (view_x[1] - view_x[0]);
+    let y_norm = (data_y - view_y[0]) / (view_y[1] - view_y[0]);
+    Point::new(
+        padding + x_norm * plot_width,
+        padding + (1.0 - y_norm) * plot_height,
+    )
+}
+
 /// Clamp a view range to bounds, keeping the range size the same (shift rather than squash).
 /// If the view range exceeds bounds+padding, clamp it to the bounds size.
 fn clamp_range_to_bounds(
@@ -707,8 +784,10 @@ impl shader::Primitive for PlotterPrimitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
-        // Combine grid + selection vertices for the grid render pass
-        if self.selection_vertices.is_empty() {
+        // Combine grid + selection + highlight vertices for the grid render pass
+        let has_overlay =
+            !self.selection_vertices.is_empty() || !self.highlight_vertices.is_empty();
+        if !has_overlay {
             pipeline.update(
                 device,
                 queue,
@@ -720,6 +799,7 @@ impl shader::Primitive for PlotterPrimitive {
         } else {
             let mut combined = self.grid_vertices.clone();
             combined.extend_from_slice(&self.selection_vertices);
+            combined.extend_from_slice(&self.highlight_vertices);
             pipeline.update(
                 device,
                 queue,
@@ -758,7 +838,9 @@ impl shader::Primitive for PlotterPrimitive {
     }
 
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
-        let total_grid = self.grid_vertices.len() + self.selection_vertices.len();
+        let total_grid = self.grid_vertices.len()
+            + self.selection_vertices.len()
+            + self.highlight_vertices.len();
         if total_grid > 0 {
             pipeline.render_grid(render_pass, total_grid as u32);
         }
@@ -814,8 +896,9 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             || interaction.zoom_y
             || interaction.double_click_to_fit
             || interaction.zoom_select;
+        let has_tooltip = self.options.tooltip.is_some();
 
-        if !has_any_interaction {
+        if !has_any_interaction && !has_tooltip {
             return None;
         }
 
@@ -948,6 +1031,8 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
 
                     // Ctrl+click = zoom select
                     if interaction.zoom_select && state.modifiers.control() {
+                        // Clear tooltip when starting interaction
+                        *self.tooltip_state.hovered.borrow_mut() = None;
                         state.interaction_mode = InteractionMode::ZoomSelecting;
                         state.drag_start = Some(pos);
                         state.zoom_select_current = Some(pos);
@@ -956,6 +1041,8 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
 
                     // Start panning
                     if interaction.pan_x || interaction.pan_y {
+                        // Clear tooltip when starting interaction
+                        *self.tooltip_state.hovered.borrow_mut() = None;
                         state.elastic_animation = None; // Cancel any ongoing animation
                         state.interaction_mode = InteractionMode::Panning;
                         state.drag_start = Some(pos);
@@ -1094,6 +1181,16 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                 }
             }
 
+            // ---- Cursor left widget ----
+            Event::Mouse(mouse::Event::CursorLeft) => {
+                // Clear tooltip when cursor leaves the widget
+                if self.options.tooltip.is_some() {
+                    *self.tooltip_state.hovered.borrow_mut() = None;
+                    return Some(shader::Action::request_redraw());
+                }
+                None
+            }
+
             // ---- Mouse move (drag) ----
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 state.last_cursor = Some(*position);
@@ -1176,7 +1273,109 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                         // Request redraw to update the selection rectangle
                         Some(shader::Action::request_redraw().and_capture())
                     }
-                    InteractionMode::Idle => None,
+                    InteractionMode::Idle => {
+                        // ---- Tooltip: nearest-point detection ----
+                        if let Some(ref tooltip_config) = self.options.tooltip {
+                            let cursor_pos = cursor.position_in(bounds);
+                            if let Some(cursor_pos) = cursor_pos {
+                                // Skip tooltip when cursor is over the legend
+                                if self.options.legend.is_some() {
+                                    let layout = self.legend_state.layout.borrow();
+                                    if let Some(legend_bounds) = layout.bounds {
+                                        if legend_bounds.contains(cursor_pos) {
+                                            if self.tooltip_state.hovered.borrow().is_some() {
+                                                *self.tooltip_state.hovered.borrow_mut() = None;
+                                                return Some(shader::Action::request_redraw());
+                                            }
+                                            return None;
+                                        }
+                                    }
+                                }
+
+                                // Check cursor is within the plot area (inside padding)
+                                let in_plot = cursor_pos.x >= padding
+                                    && cursor_pos.x <= bounds.width - padding
+                                    && cursor_pos.y >= padding
+                                    && cursor_pos.y <= bounds.height - padding;
+
+                                if in_plot {
+                                    let max_dist_sq =
+                                        tooltip_config.max_distance * tooltip_config.max_distance;
+                                    let mut best_dist_sq = max_dist_sq;
+                                    let mut best: Option<HoveredPoint> = None;
+
+                                    let hidden = self.legend_state.hidden_series.borrow();
+                                    for (series_idx, series) in self.series.iter().enumerate() {
+                                        if hidden.contains(&series_idx) {
+                                            continue;
+                                        }
+                                        let iter: Box<dyn Iterator<Item = (f32, f32)> + '_> =
+                                            match &series.points {
+                                                PlotPoints::Owned(pts) => {
+                                                    Box::new(pts.iter().map(|p| (p.x, p.y)))
+                                                }
+                                                PlotPoints::Borrowed(pts) => {
+                                                    Box::new(pts.iter().map(|p| (p.x, p.y)))
+                                                }
+                                                PlotPoints::Generator(generator) => {
+                                                    let (x0, x1) = generator.x_range;
+                                                    let span = x1 - x0;
+                                                    let n = generator.points;
+                                                    Box::new((0..n).map(move |i| {
+                                                        let t =
+                                                            i as f32 / (n - 1).max(1) as f32;
+                                                        let x = x0 + t * span;
+                                                        let y = (generator.function)(x);
+                                                        (x, y)
+                                                    }))
+                                                }
+                                            };
+
+                                        for (dx, dy) in iter {
+                                            let screen = data_to_screen(
+                                                dx, dy, bounds, view_x, view_y, padding,
+                                            );
+                                            let ddx = screen.x - cursor_pos.x;
+                                            let ddy = screen.y - cursor_pos.y;
+                                            let dist_sq = ddx * ddx + ddy * ddy;
+                                            if dist_sq < best_dist_sq {
+                                                best_dist_sq = dist_sq;
+                                                best = Some(HoveredPoint {
+                                                    series_index: series_idx,
+                                                    series_label: series.label.clone(),
+                                                    x: dx,
+                                                    y: dy,
+                                                    screen_pos: screen,
+                                                });
+                                            }
+                                        }
+                                    }
+
+                                    let prev = self.tooltip_state.hovered.borrow().is_some();
+                                    *self.tooltip_state.hovered.borrow_mut() = best;
+                                    let now = self.tooltip_state.hovered.borrow().is_some();
+
+                                    // Request redraw if tooltip state changed
+                                    if prev || now {
+                                        return Some(shader::Action::request_redraw());
+                                    }
+                                } else {
+                                    // Cursor outside plot area, clear tooltip
+                                    if self.tooltip_state.hovered.borrow().is_some() {
+                                        *self.tooltip_state.hovered.borrow_mut() = None;
+                                        return Some(shader::Action::request_redraw());
+                                    }
+                                }
+                            } else {
+                                // Cursor not in widget bounds
+                                if self.tooltip_state.hovered.borrow().is_some() {
+                                    *self.tooltip_state.hovered.borrow_mut() = None;
+                                    return Some(shader::Action::request_redraw());
+                                }
+                            }
+                        }
+                        None
+                    }
                 }
             }
 
@@ -1275,6 +1474,27 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             None
         };
 
+        // Build highlight ring from tooltip state
+        let highlight = if let Some(ref tooltip_config) = self.options.tooltip {
+            let hovered = self.tooltip_state.hovered.borrow();
+            hovered.as_ref().map(|hp| {
+                let color = [
+                    tooltip_config.highlight_color.r,
+                    tooltip_config.highlight_color.g,
+                    tooltip_config.highlight_color.b,
+                    tooltip_config.highlight_color.a,
+                ];
+                (
+                    hp.screen_pos,
+                    color,
+                    tooltip_config.highlight_radius,
+                    tooltip_config.highlight_width,
+                )
+            })
+        } else {
+            None
+        };
+
         let hidden = self.legend_state.hidden_series.borrow();
         PlotterPrimitive::new(
             &self.series,
@@ -1284,6 +1504,7 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             view_y,
             selection_rect,
             &hidden,
+            highlight,
         )
     }
 

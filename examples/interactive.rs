@@ -2,7 +2,7 @@ use iced::widget::{column, row, text, Container};
 use iced::{Color, Element, Length, Theme};
 use iced_plotter::plotter::{
     AxisConfig, ColorMode, InteractionConfig, LegendConfig, LegendState, PlotPoints, PlotSeries,
-    Plotter, PlotterOptions, SeriesStyle, ViewState,
+    Plotter, PlotterOptions, SeriesStyle, TooltipConfig, TooltipState, ViewState,
 };
 
 pub fn main() {
@@ -24,6 +24,7 @@ enum Message {
 struct InteractiveExample {
     view_state: ViewState,
     legend_state: LegendState,
+    tooltip_state: TooltipState,
 }
 
 impl InteractiveExample {
@@ -31,6 +32,7 @@ impl InteractiveExample {
         Self {
             view_state: ViewState::auto_fit(),
             legend_state: LegendState::default(),
+            tooltip_state: TooltipState::default(),
         }
     }
 
@@ -65,6 +67,7 @@ impl InteractiveExample {
             text("  - Elastic over-scroll"),
             text("  - Rectangle zoom select"),
             text("  - Boundary clamping"),
+            text("  - Hover tooltip"),
             text("  - X bounds: [0, 20]"),
             text(""),
             text("Current View:"),
@@ -95,11 +98,13 @@ impl InteractiveExample {
         )
         .with_options(PlotterOptions {
             legend: Some(LegendConfig::default()),
+            tooltip: Some(TooltipConfig::default()),
             x_axis: AxisConfig::default().with_title("X Axis"),
             y_axis: AxisConfig::default().with_title("Amplitude"),
             ..PlotterOptions::default()
         })
         .with_legend_state(self.legend_state.clone())
+        .with_tooltip_state(self.tooltip_state.clone())
         .with_interaction(InteractionConfig {
             pan_x: true,
             pan_y: true,

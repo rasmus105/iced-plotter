@@ -566,6 +566,119 @@ impl LegendConfig {
 }
 
 // ================================================================================
+// Tooltip Types
+// ================================================================================
+
+/// Configuration for hover tooltips on data points.
+pub struct TooltipConfig {
+    /// Maximum screen-space distance (in pixels) to snap to a point.
+    pub max_distance: f32,
+    /// Background color of the tooltip box.
+    pub background_color: iced::Color,
+    /// Text color inside the tooltip.
+    pub text_color: iced::Color,
+    /// Font size for tooltip text.
+    pub text_size: f32,
+    /// Internal padding within the tooltip box.
+    pub padding: f32,
+    /// Format function for the X value.
+    pub format_x: Box<dyn Fn(f32) -> String>,
+    /// Format function for the Y value.
+    pub format_y: Box<dyn Fn(f32) -> String>,
+    /// Color of the highlight ring drawn around the hovered point.
+    pub highlight_color: iced::Color,
+    /// Radius of the highlight ring (in pixels).
+    pub highlight_radius: f32,
+    /// Line width of the highlight ring (in pixels).
+    pub highlight_width: f32,
+}
+
+impl Default for TooltipConfig {
+    fn default() -> Self {
+        Self {
+            max_distance: 10.0,
+            background_color: iced::Color::from_rgba(0.1, 0.1, 0.1, 0.9),
+            text_color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.9),
+            text_size: 12.0,
+            padding: 6.0,
+            format_x: Box::new(|v| format!("{v:.2}")),
+            format_y: Box::new(|v| format!("{v:.2}")),
+            highlight_color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.8),
+            highlight_radius: 8.0,
+            highlight_width: 2.0,
+        }
+    }
+}
+
+impl Clone for TooltipConfig {
+    fn clone(&self) -> Self {
+        Self {
+            max_distance: self.max_distance,
+            background_color: self.background_color,
+            text_color: self.text_color,
+            text_size: self.text_size,
+            padding: self.padding,
+            format_x: Box::new(|v| format!("{v:.2}")),
+            format_y: Box::new(|v| format!("{v:.2}")),
+            highlight_color: self.highlight_color,
+            highlight_radius: self.highlight_radius,
+            highlight_width: self.highlight_width,
+        }
+    }
+}
+
+impl std::fmt::Debug for TooltipConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TooltipConfig")
+            .field("max_distance", &self.max_distance)
+            .field("text_size", &self.text_size)
+            .field("highlight_radius", &self.highlight_radius)
+            .finish()
+    }
+}
+
+impl TooltipConfig {
+    /// Set the X value format function.
+    pub fn with_format_x(mut self, f: impl Fn(f32) -> String + 'static) -> Self {
+        self.format_x = Box::new(f);
+        self
+    }
+
+    /// Set the Y value format function.
+    pub fn with_format_y(mut self, f: impl Fn(f32) -> String + 'static) -> Self {
+        self.format_y = Box::new(f);
+        self
+    }
+}
+
+/// Information about a data point that the cursor is hovering near.
+#[derive(Clone, Debug)]
+pub struct HoveredPoint {
+    /// Index of the series this point belongs to.
+    pub series_index: usize,
+    /// Label of the series.
+    pub series_label: String,
+    /// Data-space X coordinate.
+    pub x: f32,
+    /// Data-space Y coordinate.
+    pub y: f32,
+    /// Screen-space position of the point (relative to widget bounds).
+    pub screen_pos: Point,
+}
+
+/// Shared state for tooltip hover detection.
+///
+/// Store this in your application state and pass it to [`Plotter::with_tooltip_state`]
+/// to enable tooltip rendering. The shader layer writes hovered point info,
+/// and the canvas overlay reads it to draw the tooltip.
+///
+/// Create with `TooltipState::default()`.
+#[derive(Clone, Debug, Default)]
+pub struct TooltipState {
+    pub hovered: Rc<RefCell<Option<HoveredPoint>>>,
+}
+
+// ================================================================================
 // Plotter
 // ================================================================================
 
@@ -678,6 +791,8 @@ impl AxisConfig {
 pub struct PlotterOptions {
     /// Legend configuration. `None` = no legend, `Some(config)` = show legend.
     pub legend: Option<LegendConfig>,
+    /// Tooltip configuration. `None` = no tooltip, `Some(config)` = show tooltip on hover.
+    pub tooltip: Option<TooltipConfig>,
     pub padding: f32,
     pub grid: GridStyle,
     pub x_axis: AxisConfig,
@@ -688,6 +803,7 @@ impl Default for PlotterOptions {
     fn default() -> Self {
         Self {
             legend: None,
+            tooltip: None,
             padding: 50.0,
             grid: GridStyle::default(),
             x_axis: AxisConfig::default(),
@@ -712,6 +828,9 @@ pub struct Plotter<'a, Message> {
 
     // shared legend state (visibility toggles + layout for hit testing)
     pub(crate) legend_state: LegendState,
+
+    // shared tooltip state (hovered point info for tooltip rendering)
+    pub(crate) tooltip_state: TooltipState,
 }
 
 // ================================================================================
@@ -727,6 +846,7 @@ impl<'a, Message> Plotter<'a, Message> {
             interaction: InteractionConfig::default(),
             on_view_change: None,
             legend_state: LegendState::default(),
+            tooltip_state: TooltipState::default(),
         }
     }
 
@@ -736,6 +856,15 @@ impl<'a, Message> Plotter<'a, Message> {
     /// Create with `LegendState::default()` and store in your app state.
     pub fn with_legend_state(mut self, state: LegendState) -> Self {
         self.legend_state = state;
+        self
+    }
+
+    /// Set the shared tooltip state.
+    ///
+    /// This allows you to persist tooltip hover state across frames.
+    /// Create with `TooltipState::default()` and store in your app state.
+    pub fn with_tooltip_state(mut self, state: TooltipState) -> Self {
+        self.tooltip_state = state;
         self
     }
 
@@ -889,6 +1018,9 @@ impl<'a, Message> Plotter<'a, Message> {
             legend_entries,
             hidden_series: self.legend_state.hidden_series.clone(),
             legend_layout: self.legend_state.layout.clone(),
+            // Tooltip
+            tooltip_config: self.options.tooltip.clone(),
+            tooltip_state: self.tooltip_state.clone(),
         };
 
         stack![
@@ -955,6 +1087,9 @@ struct AxisOverlay {
     legend_entries: Vec<LegendEntry>,
     hidden_series: HiddenSeries,
     legend_layout: LegendLayoutInfo,
+    // Tooltip
+    tooltip_config: Option<TooltipConfig>,
+    tooltip_state: TooltipState,
 }
 
 impl<Message> canvas::Program<Message> for AxisOverlay {
@@ -1235,6 +1370,81 @@ impl<Message> canvas::Program<Message> for AxisOverlay {
                 bounds: legend_bg_rect,
                 toggles: toggle_rects,
             };
+        }
+
+        // ---- Tooltip ----
+        if let Some(ref config) = self.tooltip_config {
+            let hovered = self.tooltip_state.hovered.borrow();
+            if let Some(ref hp) = *hovered {
+                let format_x = &config.format_x;
+                let format_y = &config.format_y;
+                let text = format!(
+                    "{}: ({}, {})",
+                    hp.series_label,
+                    (format_x)(hp.x),
+                    (format_y)(hp.y)
+                );
+
+                // Estimate text dimensions
+                let char_width = config.text_size * 0.6;
+                let text_width = text.len() as f32 * char_width;
+                let text_height = config.text_size;
+
+                let box_width = text_width + config.padding * 2.0;
+                let box_height = text_height + config.padding * 2.0;
+
+                // Position tooltip above and to the right of the point, with clamping
+                let offset_x = 12.0;
+                let offset_y = -12.0;
+
+                let mut tooltip_x = hp.screen_pos.x + offset_x;
+                let mut tooltip_y = hp.screen_pos.y + offset_y - box_height;
+
+                // Clamp to widget bounds
+                if tooltip_x + box_width > bounds.width {
+                    tooltip_x = hp.screen_pos.x - offset_x - box_width;
+                }
+                if tooltip_x < 0.0 {
+                    tooltip_x = 0.0;
+                }
+                if tooltip_y < 0.0 {
+                    tooltip_y = hp.screen_pos.y + offset_x; // flip below
+                }
+                if tooltip_y + box_height > bounds.height {
+                    tooltip_y = bounds.height - box_height;
+                }
+
+                // Draw background
+                frame.fill_rectangle(
+                    Point::new(tooltip_x, tooltip_y),
+                    iced::Size::new(box_width, box_height),
+                    config.background_color,
+                );
+
+                // Draw border
+                frame.stroke_rectangle(
+                    Point::new(tooltip_x, tooltip_y),
+                    iced::Size::new(box_width, box_height),
+                    canvas::Stroke::default()
+                        .with_color(iced::Color::from_rgba(1.0, 1.0, 1.0, 0.3))
+                        .with_width(1.0),
+                );
+
+                // Draw text
+                frame.fill_text(canvas::Text {
+                    content: text,
+                    size: iced::Pixels(config.text_size),
+                    position: Point::new(
+                        tooltip_x + config.padding,
+                        tooltip_y + config.padding + text_height / 2.0,
+                    ),
+                    color: config.text_color,
+                    align_x: iced::alignment::Horizontal::Left.into(),
+                    align_y: iced::alignment::Vertical::Center,
+                    font: Font::MONOSPACE,
+                    ..canvas::Text::default()
+                });
+            }
         }
 
         vec![frame.into_geometry()]
