@@ -192,11 +192,13 @@ fn fs_marker(in: VertexOutput) -> @location(0) vec4<f32> {
 struct LineVertexInput {
     @location(0) position: vec2<f32>,  // Already in screen coordinates
     @location(1) color: vec4<f32>,
+    @location(2) edge_distance: f32,   // Signed normalised distance from line centre
 }
 
 struct LineVertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) edge_distance: f32,
 }
 
 @vertex
@@ -209,13 +211,21 @@ fn vs_line(vertex: LineVertexInput) -> LineVertexOutput {
     
     out.clip_position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
     out.color = vertex.color;
+    out.edge_distance = vertex.edge_distance;
     
     return out;
 }
 
 @fragment
 fn fs_line(in: LineVertexOutput) -> @location(0) vec4<f32> {
-    return in.color;
+    // Anti-aliased edges: abs(edge_distance) is 0 at centre, 1.0 at original
+    // line edge, >1.0 in the AA extension fringe.
+    let d = abs(in.edge_distance);
+    let alpha = 1.0 - smoothstep(0.8, 1.0, d);
+    if alpha < 0.001 {
+        discard;
+    }
+    return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
 
 

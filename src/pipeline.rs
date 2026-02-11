@@ -146,7 +146,7 @@ impl Pipeline {
             ],
         };
 
-        // Line vertex buffer layout - uses RawPoint but only reads position and color
+        // Line vertex buffer layout - uses RawPoint: position, color, and edge_distance
         let line_vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<RawPoint>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -161,7 +161,12 @@ impl Pipeline {
                     offset: 8,
                     shader_location: 1,
                 },
-                // Lines don't use distance/pattern yet - will add later if needed
+                // edge_distance for line anti-aliasing (offset 28 = after shape u32)
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32,
+                    offset: 28,
+                    shader_location: 2,
+                },
             ],
         };
 

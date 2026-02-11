@@ -481,13 +481,25 @@ impl PlotterPrimitive {
                     continue;
                 }
 
-                let nx = -dy / len * half_width;
-                let ny = dx / len * half_width;
+                // Extend the quad by 1px on each side for anti-aliased edges.
+                // edge_distance is interpolated across the quad:
+                //   0.0  = line centre
+                //   1.0  = original half-width (start of fade)
+                //  >1.0  = extension zone (fades to transparent)
+                // We use signed values (+/- edge_outer) so interpolation crosses 0 at the centre.
+                let aa_extend: f32 = 1.0; // extra pixels for AA fringe
+                let extended_half = half_width + aa_extend;
 
-                let v0 = RawPoint::new(sx0 + nx, sy0 + ny, color);
-                let v1 = RawPoint::new(sx0 - nx, sy0 - ny, color);
-                let v2 = RawPoint::new(sx1 + nx, sy1 + ny, color);
-                let v3 = RawPoint::new(sx1 - nx, sy1 - ny, color);
+                let nx = -dy / len * extended_half;
+                let ny = dx / len * extended_half;
+
+                let edge_outer = extended_half / half_width.max(0.5);
+
+                // +nx side gets +edge_outer, -nx side gets -edge_outer
+                let v0 = RawPoint::with_edge_distance(sx0 + nx, sy0 + ny, color, edge_outer);
+                let v1 = RawPoint::with_edge_distance(sx0 - nx, sy0 - ny, color, -edge_outer);
+                let v2 = RawPoint::with_edge_distance(sx1 + nx, sy1 + ny, color, edge_outer);
+                let v3 = RawPoint::with_edge_distance(sx1 - nx, sy1 - ny, color, -edge_outer);
 
                 vertices.push(v0);
                 vertices.push(v1);
@@ -511,6 +523,23 @@ impl PlotterPrimitive {
         let plot_height = uniforms.viewport_size[1] - 2.0 * padding_y;
         let x_range = uniforms.x_range;
         let y_range = uniforms.y_range;
+
+        // Plot area background quad (rendered first, behind everything else)
+        if let Some(bg) = options.background_color {
+            let color = [bg.r, bg.g, bg.b, bg.a];
+            let x0 = padding_x;
+            let y0 = padding_y;
+            let x1 = padding_x + plot_width;
+            let y1 = padding_y + plot_height;
+
+            vertices.push(RawPoint::new(x0, y0, color));
+            vertices.push(RawPoint::new(x1, y0, color));
+            vertices.push(RawPoint::new(x0, y1, color));
+
+            vertices.push(RawPoint::new(x1, y0, color));
+            vertices.push(RawPoint::new(x1, y1, color));
+            vertices.push(RawPoint::new(x0, y1, color));
+        }
 
         let push_line_quad = |vertices: &mut Vec<RawPoint>,
                               x0: f32,
@@ -962,6 +991,54 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                 return Some(shader::Action::publish((on_change)(new_view)));
             }
             return Some(shader::Action::request_redraw());
+        }
+
+        // ---------- Passive elastic bounds enforcement ----------
+        // When the user is idle (not dragging, no animation) but the view has
+        // drifted out of bounds (e.g. because new data shifted the effective
+        // bounds), start a spring-back animation to pull the view back in.
+        if interaction.elastic && state.interaction_mode == InteractionMode::Idle {
+            let current_x = self.view_state.x_range.unwrap_or((view_x[0], view_x[1]));
+            let current_y = self.view_state.y_range.unwrap_or((view_y[0], view_y[1]));
+
+            let x_out = interaction.pan_x
+                && self.view_state.x_range.is_some()
+                && is_out_of_bounds(current_x, effective_x_bounds, interaction.boundary_padding);
+            let y_out = interaction.pan_y
+                && self.view_state.y_range.is_some()
+                && is_out_of_bounds(current_y, effective_y_bounds, interaction.boundary_padding);
+
+            if x_out || y_out {
+                let target_x = if x_out {
+                    Some(clamp_range_to_bounds(
+                        current_x,
+                        effective_x_bounds,
+                        interaction.boundary_padding,
+                    ))
+                } else {
+                    None
+                };
+                let target_y = if y_out {
+                    Some(clamp_range_to_bounds(
+                        current_y,
+                        effective_y_bounds,
+                        interaction.boundary_padding,
+                    ))
+                } else {
+                    None
+                };
+
+                state.elastic_animation = Some(ElasticState {
+                    from_x: if x_out { Some(current_x) } else { None },
+                    from_y: if y_out { Some(current_y) } else { None },
+                    to_x: target_x,
+                    to_y: target_y,
+                    start_time: std::time::Instant::now(),
+                    duration_ms: interaction.elastic_duration_ms,
+                });
+
+                return Some(shader::Action::request_redraw());
+            }
         }
 
         match event {

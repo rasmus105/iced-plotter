@@ -797,6 +797,14 @@ pub struct PlotterOptions {
     pub grid: GridStyle,
     pub x_axis: AxisConfig,
     pub y_axis: AxisConfig,
+    /// Fractional padding added around the data extent when auto-fitting.
+    /// 0.05 means 5% of the data span is added on each side.
+    /// Set to 0.0 to disable.
+    pub autofit_padding: f32,
+    /// Optional background color for the plot area (inside the padding).
+    /// `Some(color)` draws a filled rectangle behind the grid and data.
+    /// Defaults to a subtle darkening overlay for visual separation.
+    pub background_color: Option<iced::Color>,
 }
 
 impl Default for PlotterOptions {
@@ -808,6 +816,8 @@ impl Default for PlotterOptions {
             grid: GridStyle::default(),
             x_axis: AxisConfig::default(),
             y_axis: AxisConfig::default(),
+            autofit_padding: 0.05,
+            background_color: Some(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.15)),
         }
     }
 }
@@ -946,14 +956,23 @@ impl<'a, Message> Plotter<'a, Message> {
     /// Returns (view_x_range, view_y_range, data_x_range, data_y_range).
     pub fn resolve_view_ranges(&self) -> ([f32; 2], [f32; 2], [f32; 2], [f32; 2]) {
         let (data_x, data_y) = self.compute_data_ranges();
+        let af = self.options.autofit_padding;
 
         let view_x = match self.view_state.x_range {
             Some((lo, hi)) => [lo, hi],
-            None => data_x,
+            None => {
+                let span = data_x[1] - data_x[0];
+                let margin = span * af;
+                [data_x[0] - margin, data_x[1] + margin]
+            }
         };
         let view_y = match self.view_state.y_range {
             Some((lo, hi)) => [lo, hi],
-            None => data_y,
+            None => {
+                let span = data_y[1] - data_y[0];
+                let margin = span * af;
+                [data_y[0] - margin, data_y[1] + margin]
+            }
         };
 
         (view_x, view_y, data_x, data_y)

@@ -12,8 +12,10 @@ pub struct RawPoint {
     pub color: [f32; 4],
     /// Marker shape as u32 (MarkerShape enum value)
     pub shape: u32,
-    /// Padding for alignment (16-byte boundaries)
-    pub _padding: u32,
+    /// Perpendicular distance from line center, normalised to [0, 1] at the
+    /// original (non-extended) half-width.  Used by the line fragment shader
+    /// for edge anti-aliasing.  Ignored for markers / grid.
+    pub edge_distance: f32,
 }
 
 impl RawPoint {
@@ -22,7 +24,7 @@ impl RawPoint {
             position: [x, y],
             color,
             shape: 0, // Default to circle
-            _padding: 0,
+            edge_distance: 0.0,
         }
     }
 
@@ -32,7 +34,19 @@ impl RawPoint {
             position: [x, y],
             color,
             shape,
-            _padding: 0,
+            edge_distance: 0.0,
+        }
+    }
+
+    /// Create a line vertex with edge distance for anti-aliasing.
+    /// `edge_dist` is the normalised perpendicular distance from the line
+    /// centre: 0.0 at the centre, 1.0 at the original half-width edge.
+    pub fn with_edge_distance(x: f32, y: f32, color: [f32; 4], edge_dist: f32) -> Self {
+        Self {
+            position: [x, y],
+            color,
+            shape: 0,
+            edge_distance: edge_dist,
         }
     }
 }
