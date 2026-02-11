@@ -703,7 +703,7 @@ fn data_to_screen(
 
 /// Clamp a view range to bounds, keeping the range size the same (shift rather than squash).
 /// If the view range exceeds bounds+padding, clamp it to the bounds size.
-fn clamp_range_to_bounds(
+pub fn clamp_range_to_bounds(
     range: (f32, f32),
     bounds: Option<(f32, f32)>,
     padding_frac: f32,
@@ -931,7 +931,7 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
             return None;
         }
 
-        let (view_x, view_y, data_x, data_y) = self.resolve_view_ranges();
+        let (view_x, view_y, data_x, data_y) = self.resolve_view_ranges(false);
         let padding = self.options.padding;
 
         // When elastic is enabled but no explicit bounds are set, use the data
@@ -991,54 +991,6 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
                 return Some(shader::Action::publish((on_change)(new_view)));
             }
             return Some(shader::Action::request_redraw());
-        }
-
-        // ---------- Passive elastic bounds enforcement ----------
-        // When the user is idle (not dragging, no animation) but the view has
-        // drifted out of bounds (e.g. because new data shifted the effective
-        // bounds), start a spring-back animation to pull the view back in.
-        if interaction.elastic && state.interaction_mode == InteractionMode::Idle {
-            let current_x = self.view_state.x_range.unwrap_or((view_x[0], view_x[1]));
-            let current_y = self.view_state.y_range.unwrap_or((view_y[0], view_y[1]));
-
-            let x_out = interaction.pan_x
-                && self.view_state.x_range.is_some()
-                && is_out_of_bounds(current_x, effective_x_bounds, interaction.boundary_padding);
-            let y_out = interaction.pan_y
-                && self.view_state.y_range.is_some()
-                && is_out_of_bounds(current_y, effective_y_bounds, interaction.boundary_padding);
-
-            if x_out || y_out {
-                let target_x = if x_out {
-                    Some(clamp_range_to_bounds(
-                        current_x,
-                        effective_x_bounds,
-                        interaction.boundary_padding,
-                    ))
-                } else {
-                    None
-                };
-                let target_y = if y_out {
-                    Some(clamp_range_to_bounds(
-                        current_y,
-                        effective_y_bounds,
-                        interaction.boundary_padding,
-                    ))
-                } else {
-                    None
-                };
-
-                state.elastic_animation = Some(ElasticState {
-                    from_x: if x_out { Some(current_x) } else { None },
-                    from_y: if y_out { Some(current_y) } else { None },
-                    to_x: target_x,
-                    to_y: target_y,
-                    start_time: std::time::Instant::now(),
-                    duration_ms: interaction.elastic_duration_ms,
-                });
-
-                return Some(shader::Action::request_redraw());
-            }
         }
 
         match event {
@@ -1538,7 +1490,11 @@ impl<Message: Clone> shader::Program<Message> for Plotter<'_, Message> {
     }
 
     fn draw(&self, state: &Self::State, _cursor: Cursor, bounds: Rectangle) -> Self::Primitive {
-        let (view_x, view_y, _, _) = self.resolve_view_ranges();
+        // Enforce bounds when idle — but not during drag or elastic animation
+        // so that elastic over-scroll remains visible.
+        let enforce = state.interaction_mode == InteractionMode::Idle
+            && state.elastic_animation.is_none();
+        let (view_x, view_y, _, _) = self.resolve_view_ranges(enforce);
 
         // Build selection rectangle from state if zoom-selecting
         let selection_rect = if state.interaction_mode == InteractionMode::ZoomSelecting {

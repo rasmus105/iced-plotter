@@ -953,13 +953,29 @@ impl<'a, Message> Plotter<'a, Message> {
     }
 
     /// Resolve the actual view ranges by combining ViewState with data bounds.
+    ///
+    /// When `enforce_bounds` is `true` and elastic bounds are active, explicit
+    /// view ranges are clamped so the rendered view stays within the padded
+    /// data bounds.  Pass `false` during active drag / elastic animation so
+    /// that over-scroll is still visible.
+    ///
     /// Returns (view_x_range, view_y_range, data_x_range, data_y_range).
-    pub fn resolve_view_ranges(&self) -> ([f32; 2], [f32; 2], [f32; 2], [f32; 2]) {
+    pub fn resolve_view_ranges(&self, enforce_bounds: bool) -> ([f32; 2], [f32; 2], [f32; 2], [f32; 2]) {
         let (data_x, data_y) = self.compute_data_ranges();
         let af = self.options.autofit_padding;
+        let interaction = &self.interaction;
 
         let view_x = match self.view_state.x_range {
-            Some((lo, hi)) => [lo, hi],
+            Some((lo, hi)) => {
+                if enforce_bounds && interaction.elastic && interaction.pan_x {
+                    let bounds = interaction.x_bounds.or(Some((data_x[0], data_x[1])));
+                    let (clo, chi) =
+                        crate::shader::clamp_range_to_bounds((lo, hi), bounds, interaction.boundary_padding);
+                    [clo, chi]
+                } else {
+                    [lo, hi]
+                }
+            }
             None => {
                 let span = data_x[1] - data_x[0];
                 let margin = span * af;
@@ -967,7 +983,16 @@ impl<'a, Message> Plotter<'a, Message> {
             }
         };
         let view_y = match self.view_state.y_range {
-            Some((lo, hi)) => [lo, hi],
+            Some((lo, hi)) => {
+                if enforce_bounds && interaction.elastic && interaction.pan_y {
+                    let bounds = interaction.y_bounds.or(Some((data_y[0], data_y[1])));
+                    let (clo, chi) =
+                        crate::shader::clamp_range_to_bounds((lo, hi), bounds, interaction.boundary_padding);
+                    [clo, chi]
+                } else {
+                    [lo, hi]
+                }
+            }
             None => {
                 let span = data_y[1] - data_y[0];
                 let margin = span * af;
@@ -983,7 +1008,7 @@ impl<'a, Message> Plotter<'a, Message> {
     where
         Message: Clone + 'a,
     {
-        let (view_x, view_y, _, _) = self.resolve_view_ranges();
+        let (view_x, view_y, _, _) = self.resolve_view_ranges(true);
 
         let x_ticks = crate::ticks::compute_ticks(view_x[0], view_x[1], &self.options.x_axis.ticks);
         let y_ticks = crate::ticks::compute_ticks(view_y[0], view_y[1], &self.options.y_axis.ticks);
