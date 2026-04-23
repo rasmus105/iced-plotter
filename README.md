@@ -2,10 +2,12 @@
 
 Iced graph/plotting library.
 
-> [!IMPORTANT]
-> Work in progress.
+## Quick Start
 
-## Acknowledgements
+```bash
+cargo run --example=interactive
+```
 
-Used several other projects for inspiration when writing this:
+## Links
+
 - [egui_plot](https://github.com/emilk/egui_plot)
